@@ -104,7 +104,7 @@
   // ---------------------------------------------------------------- building blocks
   const board = (items) => `
     <div class="board" style="--n:${items.length}">
-      ${items.map((i) => `<div class="${i.mark ? "you" : ""}"><b>${i.v}</b><span>${i.l}</span></div>`).join("")}
+      ${items.map((i) => `<div class="${i.mark ? "you" : ""}"><b class="${String(i.v).replace(/&[lg]t;/g, "<").length > 5 || /[<>]|&[lg]t;/.test(String(i.v)) ? "long" : ""}">${i.v}</b><span>${i.l}</span></div>`).join("")}
     </div>`;
   const how = (title, paras) => `
     <details class="how"><summary>${esc(title)}</summary>${paras.map((p) => `<p>${p}</p>`).join("")}</details>`;

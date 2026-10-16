@@ -135,6 +135,7 @@ h3 { font: 700 15px var(--body); margin: 0; }
   display: block; font: 800 32px/1 var(--display); font-variant-numeric: tabular-nums; letter-spacing: 0.01em;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.board b.long { font-size: 26px; line-height: 32px; }
 .board span { display: block; margin-top: 5px; font-size: 11.5px; line-height: 1.3; color: var(--muted); }
 .board .you b { box-shadow: inset 0 -5px 0 var(--marker); display: inline-block; padding: 0 2px; }
 
@@ -160,7 +161,7 @@ button.row:hover .pname { text-decoration: underline; }
 .pname { display: block; font-weight: 650; overflow: hidden; text-overflow: ellipsis; }
 .meta { display: block; font-size: 12.5px; line-height: 1.4; color: var(--muted); margin-top: 2px; }
 .meta.why { color: var(--ink); }
-.meta > span + span::before { content: ", "; }
+.meta > span + span:not(.user)::before { content: ", "; }
 .val { text-align: right; }
 .val b { display: block; font: 750 21px/1 var(--display); font-variant-numeric: tabular-nums; }
 .val small { display: block; font-size: 11.5px; color: var(--muted); margin-top: 3px; }
