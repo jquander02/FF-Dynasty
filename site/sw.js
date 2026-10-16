@@ -1,5 +1,5 @@
 // Offline support: app shell cached; data is network-first so it's always fresh when online.
-const SHELL = "dynasty-shell-v1";
+const SHELL = "dynasty-shell-v2";
 const DATA = "dynasty-data";
 const SHELL_FILES = ["./", "index.html", "styles.css", "app.js", "manifest.webmanifest",
   "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];

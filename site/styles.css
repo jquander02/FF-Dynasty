@@ -68,7 +68,7 @@ a { color: var(--accent); }
 /* ---- bottom tab bar (phone) ---- */
 .tabbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
-  display: grid; grid-template-columns: repeat(5, 1fr);
+  display: grid; grid-template-columns: repeat(6, 1fr);
   height: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
   padding-bottom: env(safe-area-inset-bottom);
   background: var(--surface);
@@ -129,7 +129,7 @@ select { flex: 1; min-width: 0; }
 .age { font-variant-numeric: tabular-nums; text-align: right; }
 .age b { display: block; }
 .badge { display: inline-block; font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 99px; margin-left: 6px; vertical-align: 1px; border: 1px solid currentColor; }
-.badge.taxi { color: var(--warn); } .badge.ir, .badge.inj { color: var(--bad); } .badge.start { color: var(--accent); }
+.badge.taxi { color: var(--warn); } .badge.buy { color: var(--accent); } .badge.sell { color: var(--warn); } .badge.ir, .badge.inj { color: var(--bad); } .badge.start { color: var(--accent); }
 
 /* ---- picks ---- */
 .pick { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
@@ -162,3 +162,8 @@ select { flex: 1; min-width: 0; }
   .team-cell { max-width: none; }
   .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
 }
+
+.up { color: var(--accent); font-weight: 600; }
+.down { color: var(--bad); font-weight: 600; }
+button.more { font: inherit; color: var(--accent); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; width: 100%; min-height: 44px; }
+.controls .seg { flex-shrink: 0; }

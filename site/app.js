@@ -7,6 +7,9 @@
   const POS_ORDER = ["QB", "RB", "WR", "TE", "K", "DEF"];
   let rosterFor = null;
   let pickFilter = "mine";
+  let valPos = "ALL";
+  let valScope = "all";
+  let valLimit = 100;
 
   const esc = (s) =>
     String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -17,7 +20,7 @@
   };
 
   async function load() {
-    const files = ["meta", "teams", "rosters", "picks", "activity", "history"];
+    const files = ["meta", "teams", "rosters", "picks", "activity", "history", "values"];
     const got = await Promise.all(
       files.map((f) => fetch(`data/${f}.json`, { cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).catch(() => null))
     );
@@ -50,11 +53,12 @@
         <div class="stat"><b>${rank ? `${rank} of ${teams.length}` : "–"}</b><span>Your standing</span></div>
         <div class="stat"><b>${me ? `${me.wins}-${me.losses}${me.ties ? "-" + me.ties : ""}` : "–"}</b><span>Your record</span></div>
         <div class="stat"><b>${me ? "$" + fmt(me.faab_left) : "–"}</b><span>FAAB left of $${fmt(s.faab)}</span></div>
+        <div class="stat"><b>${me?.value_rank ? ordinal(me.value_rank) : "–"}</b><span>Roster value · ${me?.value ? fmt(me.value) : "–"}</span></div>
         <div class="stat"><b>${me?.avg_age ?? "–"}</b><span>Avg age (QB/RB/WR/TE)${ageRank ? ` · ${ordinal(ageRank)} youngest` : ""}</span></div>
       </div>
       <h2>Standings</h2>
       <div class="table-wrap"><table>
-        <thead><tr><th>#</th><th>Team</th><th class="num">W-L</th><th class="num">PF</th><th class="num">Max PF</th><th class="num">Age</th><th class="num">FAAB</th></tr></thead>
+        <thead><tr><th>#</th><th>Team</th><th class="num">W-L</th><th class="num">PF</th><th class="num">Max PF</th><th class="num">Value</th><th class="num">Age</th><th class="num">FAAB</th></tr></thead>
         <tbody>${teams.map((t, i) => `
           <tr class="${t.is_me ? "me" : ""}">
             <td>${i + 1}</td>
@@ -62,6 +66,7 @@
             <td class="num">${t.wins}-${t.losses}${t.ties ? "-" + t.ties : ""}</td>
             <td class="num">${fmt(t.pf, 1)}</td>
             <td class="num">${fmt(t.max_pf, 1)}</td>
+            <td class="num">${t.value ? `${fmt(t.value / 1000, 1)}k <span class="pmeta">${ordinal(t.value_rank)}</span>` : "–"}</td>
             <td class="num">${t.avg_age ?? "–"}</td>
             <td class="num">$${fmt(t.faab_left)}</td>
           </tr>`).join("")}</tbody>
@@ -93,6 +98,7 @@
         </select>
       </div>
       <div class="stats">
+        <div class="stat"><b>${t?.value ? fmt(t.value) : "–"}</b><span>Roster value${t?.value_rank ? ` · ${ordinal(t.value_rank)} of ${teams.length}` : ""}</span></div>
         <div class="stat"><b>${t?.avg_age ?? "–"}</b><span>Avg age (QB/RB/WR/TE)</span></div>
         <div class="stat"><b>${under25}</b><span>Under 25</span></div>
         <div class="stat"><b>${over28}</b><span>28 or older</span></div>
@@ -102,15 +108,60 @@
       ${groups.map(([pos, list]) => `
         <div class="card">
           <h2>${pos} <span class="muted">· ${list.length}</span></h2>
-          ${list.sort((a, b) => (a.slot === "starter" ? -1 : 0) - (b.slot === "starter" ? -1 : 0) || (a.age ?? 99) - (b.age ?? 99)).map((p) => `
+          ${list.sort((a, b) => (b.val ?? -1) - (a.val ?? -1) || (a.age ?? 99) - (b.age ?? 99)).map((p) => `
             <div class="player">
               <div class="pos ${esc(p.pos)}">${esc(p.pos)}</div>
               <div><div class="pname">${esc(p.name)}${slotBadge(p)}${inj(p)}</div>
-                   <div class="pmeta">${esc(p.team || "FA")}${p.exp != null ? ` · ${p.exp === 0 ? "rookie" : "yr " + (p.exp + 1)}` : ""}</div></div>
-              <div class="age"><b>${p.age ?? "–"}</b><span class="pmeta">age</span></div>
+                   <div class="pmeta">${esc(p.team || "FA")} · age ${p.age ?? "–"}${p.exp != null ? ` · ${p.exp === 0 ? "rookie" : "yr " + (p.exp + 1)}` : ""}${p.ppg != null ? ` · ${p.ppg} ppg` : ""}${signal(p)}</div></div>
+              <div class="age"><b>${p.val != null ? fmt(p.val) : "–"}</b><span class="pmeta">${p.prank ? `${esc(p.pos)}${p.prank}` : "value"}</span></div>
             </div>`).join("")}
         </div>`).join("") || `<div class="empty">No players on this roster.</div>`}
       </div>`;
+  }
+
+  // ---------------------------------------------------------------- Values
+  function signal(p) {
+    const mkt = p.fc ?? p.dp;
+    if (p.model == null || mkt == null) return "";
+    const d = (p.model - mkt) / Math.max(mkt, 800);
+    if (d > 0.25) return ` <span class="badge buy">MODEL LIKES</span>`;
+    if (d < -0.25) return ` <span class="badge sell">MARKET LIKES</span>`;
+    return "";
+  }
+
+  function renderValues() {
+    const me = myId();
+    let list = D.values || [];
+    if (valPos !== "ALL") list = list.filter((p) => p.pos === valPos);
+    if (valScope === "mine") list = list.filter((p) => p.owner === me);
+    else if (valScope === "fa") list = list.filter((p) => p.owner == null);
+    else if (valScope === "others") list = list.filter((p) => p.owner != null && p.owner !== me);
+    const shown = list.slice(0, valLimit);
+    const short = (rid) => (rid == null ? "FA" : rid === me ? "You" : teamName(rid));
+    const trend = (t) => (t == null || Math.abs(t) < 50 ? "" : t > 0 ? ` <span class="up">▲${fmt(t)}</span>` : ` <span class="down">▼${fmt(-t)}</span>`);
+    return `
+      <div class="controls">
+        <div class="seg" role="group" aria-label="Position">
+          ${["ALL", "QB", "RB", "WR", "TE"].map((p) => `<button data-vp="${p}" class="${valPos === p ? "on" : ""}">${p === "ALL" ? "All" : p}</button>`).join("")}
+        </div>
+        <select id="val-scope" aria-label="Whose players">
+          <option value="all" ${valScope === "all" ? "selected" : ""}>Everyone</option>
+          <option value="mine" ${valScope === "mine" ? "selected" : ""}>Your team</option>
+          <option value="others" ${valScope === "others" ? "selected" : ""}>Other teams</option>
+          <option value="fa" ${valScope === "fa" ? "selected" : ""}>Free agents</option>
+        </select>
+      </div>
+      <div class="card">
+        ${shown.map((p) => `
+          <div class="player">
+            <div class="pos ${esc(p.pos)}">${esc(p.pos)}</div>
+            <div><div class="pname">${p.rank ? `<span class="muted">${p.rank}.</span> ` : ""}${esc(p.name)}</div>
+              <div class="pmeta">${esc(p.team || "FA")} · age ${p.age ?? "–"} · ${esc(short(p.owner))}${p.proj != null ? ` · proj ${p.proj}` : ""}${signal(p)}</div></div>
+            <div class="age"><b>${fmt(p.val)}</b><span class="pmeta">${esc(p.pos)}${p.prank ?? ""}${trend(p.trend)}</span></div>
+          </div>`).join("") || `<p class="muted">No players match.</p>`}
+      </div>
+      ${list.length > valLimit ? `<div class="controls"><button class="more" data-more="1">Show more (${list.length - valLimit} left)</button></div>` : ""}
+      <p class="foot">Value = 60% projection model, 30% FantasyCalc, 10% DynastyProcess, on FantasyCalc's scale. “Proj” is projected points per game next season in this league's scoring. Model likes / Market likes flag a 25%+ gap between the two.</p>`;
   }
 
   // ---------------------------------------------------------------- Picks
@@ -178,7 +229,7 @@
   const ordinal = (n) => n + (["th", "st", "nd", "rd"][((n % 100) - 20) % 10] || ["th", "st", "nd", "rd"][n % 100] || "th");
 
   // ---------------------------------------------------------------- router
-  const TABS = { league: renderLeague, team: renderTeam, picks: renderPicks, activity: renderActivity, history: renderHistory };
+  const TABS = { league: renderLeague, team: renderTeam, values: renderValues, picks: renderPicks, activity: renderActivity, history: renderHistory };
   function route() {
     const tab = (location.hash || "#league").slice(1);
     const fn = TABS[tab] || renderLeague;
@@ -196,8 +247,12 @@
     if (r) { rosterFor = Number(r.dataset.roster); }
     const pf = e.target.closest("[data-pf]");
     if (pf) { pickFilter = pf.dataset.pf; route(); }
+    const vp = e.target.closest("[data-vp]");
+    if (vp) { valPos = vp.dataset.vp; valLimit = 100; rerender(); }
+    if (e.target.closest("[data-more]")) { valLimit += 100; rerender(); }
   });
   document.addEventListener("change", (e) => {
+    if (e.target.id === "val-scope") { valScope = e.target.value; valLimit = 100; rerender(); return; }
     if (e.target.id === "roster-pick") {
       rosterFor = Number(e.target.value);
       store.set("roster", rosterFor);
@@ -205,6 +260,12 @@
     }
   });
   window.addEventListener("hashchange", route);
+  // re-render in place (keeps scroll position) for filter changes
+  function rerender() {
+    const y = window.scrollY;
+    route();
+    window.scrollTo(0, y);
+  }
 
   load().then(() => { header(); route(); });
 

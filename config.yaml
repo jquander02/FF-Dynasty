@@ -10,3 +10,6 @@ owner_leagues: true
 
 # Optional nflverse datasets. Remove any that make runs too slow.
 nflverse_extras: [nextgen, pfr_advstats, depth_charts, injuries]
+
+# Dynasty value blend (phase 2): leans on the projection model, uses market values too.
+value_weights: {model: 0.6, fantasycalc: 0.3, dynastyprocess: 0.1}

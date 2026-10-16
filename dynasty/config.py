@@ -26,6 +26,10 @@ class Config:
     nflverse_extras: list[str] = field(
         default_factory=lambda: ["nextgen", "pfr_advstats", "depth_charts", "injuries"]
     )
+    # Blend weights for dynasty value: projection model vs market sources.
+    value_weights: dict = field(
+        default_factory=lambda: {"model": 0.6, "fantasycalc": 0.3, "dynastyprocess": 0.1}
+    )
 
 
 def load_config(path: str | Path | None = None) -> Config:
@@ -42,7 +46,7 @@ def load_config(path: str | Path | None = None) -> Config:
         )
 
     cfg = Config(league_id=league_id, username=username)
-    for key in ("nfl_seasons_back", "owner_leagues", "nflverse_extras"):
+    for key in ("nfl_seasons_back", "owner_leagues", "nflverse_extras", "value_weights"):
         if key in data:
             setattr(cfg, key, data[key])
     for key in ("db_path", "cache_dir", "site_dir"):

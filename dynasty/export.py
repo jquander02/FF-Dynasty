@@ -77,13 +77,16 @@ def run(store: Store, site_dir: Path) -> dict[str, int]:
             }
         )
 
+    # ---- values (phase 2) ---------------------------------------------------
+    vals, proj, cur_ppg, prev_val = _value_maps(store, int(lg["season"]))
+
     # ---- rosters ----------------------------------------------------------
     snap_date = store.query(
         "SELECT MAX(snapshot_date) d FROM roster_snapshot WHERE league_id=?", (lid,)
     )[0]["d"]
     roster_players: dict[int, list] = {t["roster_id"]: [] for t in teams}
     for p in store.query(
-        """SELECT s.roster_id, s.slot, p.player_id, p.full_name, p.position, p.team, p.age,
+        """SELECT s.roster_id, s.slot, s.player_id, p.full_name, p.position, p.team, p.age,
                   p.birth_date, p.years_exp, p.injury_status
            FROM roster_snapshot s LEFT JOIN player p ON p.player_id = s.player_id
            WHERE s.league_id=? AND s.snapshot_date=?""",
@@ -99,12 +102,23 @@ def run(store: Store, site_dir: Path) -> dict[str, int]:
                 "exp": p["years_exp"],
                 "slot": p["slot"],
                 "inj": p["injury_status"],
+                **_value_fields(p["player_id"], vals, proj, cur_ppg),
             }
         )
+    owner_of = {}
     for t in teams:
-        ages = [p["age"] for p in roster_players.get(t["roster_id"], []) if p["pos"] in SKILL and p["age"]]
+        plist = roster_players.get(t["roster_id"], [])
+        ages = [p["age"] for p in plist if p["pos"] in SKILL and p["age"]]
         t["avg_age"] = round(sum(ages) / len(ages), 1) if ages else None
-        t["players"] = len(roster_players.get(t["roster_id"], []))
+        t["players"] = len(plist)
+        t["value"] = round(sum(p.get("val") or 0 for p in plist))
+        t["value_by_pos"] = {
+            pos: round(sum(p.get("val") or 0 for p in plist if p["pos"] == pos)) for pos in SKILL
+        }
+        for p in plist:
+            owner_of[p["id"]] = t["roster_id"]
+    for i, t in enumerate(sorted(teams, key=lambda x: -x["value"]), 1):
+        t["value_rank"] = i if t["value"] else None
 
     # ---- future picks -------------------------------------------------------
     picks = [
@@ -211,4 +225,73 @@ def run(store: Store, site_dir: Path) -> dict[str, int]:
     _write(out, "picks.json", picks)
     _write(out, "activity.json", activity)
     _write(out, "history.json", history)
-    return {"teams": len(teams), "picks": len(picks), "activity": len(activity), "seasons": len(history)}
+
+    # ---- values list ----------------------------------------------------------
+    info = {
+        r["player_id"]: r
+        for r in store.query("SELECT player_id, full_name, position, team, age, birth_date, years_exp FROM player "
+                             "WHERE position IN ('QB','RB','WR','TE')")
+    }
+    ranked = sorted(vals.items(), key=lambda kv: kv[1]["overall_rank"])
+    value_list = []
+    for pid, v in ranked:
+        if v["overall_rank"] > 600 and pid not in owner_of:
+            continue
+        p = info.get(pid)
+        if not p:
+            continue
+        value_list.append({
+            "id": pid, "name": p["full_name"], "pos": p["position"], "team": p["team"],
+            "age": _age(p["birth_date"], p["age"]), "exp": p["years_exp"],
+            "owner": owner_of.get(pid),
+            **_value_fields(pid, vals, proj, cur_ppg),
+            "trend": round(v["value"] - prev_val[pid]) if pid in prev_val else None,
+        })
+    _write(out, "values.json", value_list)
+    return {"teams": len(teams), "picks": len(picks), "activity": len(activity), "seasons": len(history),
+            "values": len(value_list)}
+
+
+def _table(store: Store, name: str) -> bool:
+    return bool(store.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)))
+
+
+def _value_maps(store: Store, season: int):
+    vals, proj, cur_ppg, prev = {}, {}, {}, {}
+    if _table(store, "player_value"):
+        d = store.query("SELECT MAX(snapshot_date) d FROM player_value")[0]["d"]
+        for r in store.query("SELECT * FROM player_value WHERE snapshot_date=?", (d,)):
+            vals[r["player_id"]] = dict(r)
+        old = store.query(
+            "SELECT MAX(snapshot_date) d FROM player_value WHERE snapshot_date <= date(?, '-7 day')", (d,)
+        )[0]["d"]
+        if old:
+            for r in store.query("SELECT player_id, value FROM player_value WHERE snapshot_date=?", (old,)):
+                prev[r["player_id"]] = r["value"]
+    if _table(store, "player_projection"):
+        for r in store.query("SELECT player_id, ppg_y1, talent_ppg, model_value FROM player_projection"):
+            proj[r["player_id"]] = dict(r)
+    if _table(store, "player_season"):
+        for r in store.query("SELECT player_id, ppg, games FROM player_season WHERE season=? AND player_id IS NOT NULL",
+                             (season,)):
+            cur_ppg[r["player_id"]] = (r["ppg"], r["games"])
+    return vals, proj, cur_ppg, prev
+
+
+def _value_fields(pid, vals, proj, cur_ppg) -> dict:
+    v = vals.get(pid)
+    pr = proj.get(pid)
+    c = cur_ppg.get(pid)
+    if not v and not pr and not c:
+        return {}
+    return {
+        "val": round(v["value"]) if v else None,
+        "rank": v["overall_rank"] if v else None,
+        "prank": v["position_rank"] if v else None,
+        "model": round(v["model_scaled"]) if v and v["model_scaled"] is not None else None,
+        "fc": round(v["fc_value"]) if v and v["fc_value"] is not None else None,
+        "dp": round(v["dp_scaled"]) if v and v["dp_scaled"] is not None else None,
+        "proj": pr["ppg_y1"] if pr else None,
+        "ppg": c[0] if c else None,
+        "gp": c[1] if c else None,
+    }

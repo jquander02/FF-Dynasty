@@ -1,14 +1,36 @@
-# Dynasty Analyzer — Phase 1
+# Dynasty Analyzer
 
 A year-round analysis tool for the **Dynasty** league on Sleeper (league `1312163152787443712`).
 Phase 1 is the data foundation: it pulls everything Sleeper and nflverse publish into one
 database, refreshes it on a schedule in GitHub's cloud, and publishes an app you can install
 on your iPhone and Windows PC.
 
-**What's in the app now:** standings with roster age and FAAB left · every team's roster
-(starters, taxi, IR, ages) · who owns every 2027–2029 rookie pick · the league's recent
-transactions · season history and champions. Player values, the trade lab, owner profiles
-and the rebuild planner build on this data in phases 2–4.
+**What's in the app now:** standings with roster value, age and FAAB left · every team's
+roster with player values · a Values board (all players, filter by position and owner,
+model-vs-market flags) · who owns every 2027–2029 rookie pick · recent transactions ·
+season history. Pick values and the rebuild planner (phase 3) and the trade lab and owner
+profiles (phase 4) build on this.
+
+## How player values work (phase 2)
+
+1. **League scoring.** Every regular-season player-week from nflverse is re-scored with this
+   league's exact Sleeper scoring settings, then checked against Sleeper's own points for
+   the same weeks (the refresh summary reports the match rate and any scoring keys that
+   can't be reproduced).
+2. **Projection model.** Recent points per game (blended with expected fantasy points),
+   weighted by recency and games played, adjusted with position age curves fit from
+   nflverse history, with a draft-capital prior for rookies and young players. Projected
+   for the rest of this season and the next three, then valued as points above a
+   replacement-level player (sized from this league's lineup: 12 teams, 1 QB, 2 RB,
+   2 WR, 1 TE, 1 FLEX), discounted by year.
+3. **Market.** FantasyCalc (12-team, 1QB, full PPR dynasty, from real trades) and
+   DynastyProcess values, stored daily.
+4. **Blend.** All three are put on FantasyCalc's value scale by rank and blended
+   60% model / 30% FantasyCalc / 10% DynastyProcess. Change the mix in `config.yaml`
+   under `value_weights`.
+
+Tables: `player_week`, `player_season`, `age_curve`, `draft_prior`, `player_projection`,
+`market_value` (dated), `player_value` (dated, so value trends build up over time).
 
 ---
 
