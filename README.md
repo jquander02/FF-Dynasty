@@ -64,6 +64,16 @@ reload button at the top fetches the newest refresh. Each screen has a "How this
    60% model / 30% FantasyCalc / 10% DynastyProcess. Change the mix in `config.yaml`
    under `value_weights`.
 
+**Backtest.** `dynasty/backtest.py` refits the model as of each offseason from 2015 to 2024
+using only data available then, projects the next three seasons, and scores them against what
+happened (PPG error and bias by horizon, position, age and NFL year; rank correlation within
+position; three-season value rank), next to two baselines: last season's PPG and a recency-
+weighted average. Every refresh runs it and posts the scores as a "Backtest" annotation; the
+history bundle and full report are saved to the `site-data` branch under `backtest/`. Run it
+locally with `python -m dynasty.backtest run backtest-bundle.json.gz [--set key=value ...]`.
+First results (Oct 2026), next-season PPG error: model 3.47, weighted average 3.51, last
+season 3.71 (was 3.86 before fixing the draft prior and retuning).
+
 Tables: `player_week`, `player_season`, `age_curve`, `draft_prior`, `player_projection`,
 `market_value` (dated), `player_value` (dated, so value trends build up over time).
 
