@@ -301,7 +301,7 @@ def run(store: Store, site_dir: Path) -> dict[str, int]:
     if _table(store, "owner_profile"):
         for r in store.query("SELECT * FROM owner_profile ORDER BY trades DESC"):
             d = dict(r)
-            for k in ("partners", "acquired_positions", "rookie_early", "draft_mix_other_leagues", "tags"):
+            for k in ("partners", "acquired_positions", "rookie_early", "draft_mix_other_leagues", "tags", "scout"):
                 d[k] = json.loads(d[k] or "null")
             owners_out["profiles"].append(d)
     # every past trade, valued today, used picks resolved to the player taken (Past trades view)

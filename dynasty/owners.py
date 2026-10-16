@@ -158,6 +158,140 @@ def trade_log(store: Store) -> list[dict]:
     return out
 
 
+def _scouting(store: Store, log: list[dict], owner_of: dict, names: dict) -> dict:
+    """Per-manager scouting data: trade record and tendencies, activity, lineup efficiency,
+    season finishes and rookie-draft results. Keyed by user id."""
+    from datetime import datetime, timezone
+    out = defaultdict(lambda: {"tr": {"won": 0, "lost": 0, "even": 0, "margins": [], "best": None, "worst": None,
+                                      "got_pos": Counter(), "gave_pos": Counter(), "got_age": [], "gave_age": [],
+                                      "got_picks": 0, "gave_picks": 0, "got_firsts": 0, "gave_firsts": 0,
+                                      "pieces_got": [], "pieces_gave": [], "in_season": 0, "offseason": 0,
+                                      "vs": defaultdict(lambda: [0, 0.0])}})
+    age = {r["player_id"]: r["age"] for r in store.query("SELECT player_id, age FROM player_projection") if r["age"]}
+    for r in store.query("SELECT player_id, age FROM player WHERE age IS NOT NULL"):
+        age.setdefault(r["player_id"], r["age"])
+    for tr in log:
+        when = datetime.fromtimestamp((tr["ts"] or 0) / 1000, tz=timezone.utc) if tr.get("ts") else None
+        in_season = bool(when and (when.month >= 9 or when.month == 1))
+        for i, sd in enumerate(tr["sides"]):
+            uid = sd["user_id"]
+            if not uid:
+                continue
+            t = out[uid]["tr"]
+            res = "even" if tr["even"] else ("won" if sd["net"] > 0 else "lost")
+            t[res] += 1
+            t["margins"].append(sd["net"])
+            if t["best"] is None or sd["net"] > t["best"][1]:
+                t["best"] = (tr["id"], sd["net"])
+            if t["worst"] is None or sd["net"] < t["worst"][1]:
+                t["worst"] = (tr["id"], sd["net"])
+            gave = [a for o in tr["sides"] for a in o["got"] if a.get("from") == i]
+            for lst, key_pos, key_age, key_pk, key_1st in ((sd["got"], "got_pos", "got_age", "got_picks", "got_firsts"),
+                                                           (gave, "gave_pos", "gave_age", "gave_picks", "gave_firsts")):
+                for a in lst:
+                    if a["k"] == "player":
+                        if a.get("pos") in SKILL:
+                            t[key_pos][a["pos"]] += 1
+                        if age.get(a["id"]):
+                            t[key_age].append(age[a["id"]])
+                    elif a["k"] == "pick":
+                        t[key_pk] += 1
+                        if a.get("round") == 1:
+                            t[key_1st] += 1
+            t["pieces_got"].append(sum(1 for a in sd["got"] if a["k"] != "faab"))
+            t["pieces_gave"].append(sum(1 for a in gave if a["k"] != "faab"))
+            t["in_season" if in_season else "offseason"] += 1
+            for j, o in enumerate(tr["sides"]):
+                if j != i and o["user_id"]:
+                    t["vs"][o["user_id"]][0] += 1
+                    t["vs"][o["user_id"]][1] += sd["net"]
+
+    # activity: latest transaction of any kind, and moves in the last 30 days
+    now_ms = datetime.now(tz=timezone.utc).timestamp() * 1000
+    act = defaultdict(lambda: {"last": 0, "last_type": None, "recent": 0})
+    for r in store.query("SELECT league_id, type, roster_ids, created, status_updated FROM txn WHERE status='complete'"):
+        ts = r["status_updated"] or r["created"] or 0
+        for rid in json.loads(r["roster_ids"] or "[]"):
+            uid = owner_of.get((r["league_id"], rid))
+            if not uid:
+                continue
+            a = act[uid]
+            if ts > a["last"]:
+                a["last"], a["last_type"] = ts, r["type"]
+            if now_ms - ts < 30 * 86400 * 1000:
+                a["recent"] += 1
+
+    # seasons: record, points, lineup efficiency (points / best possible), regular-season rank, playoff place
+    from .picks import bracket_places
+    seasons = defaultdict(list)
+    for lg in store.query("SELECT league_id, season, status FROM league_season ORDER BY season"):
+        rows = store.query("SELECT roster_id, owner_id, wins, losses, ties, fpts, max_pf FROM roster WHERE league_id=?",
+                           (lg["league_id"],))
+        if not rows:
+            continue
+        order = sorted(rows, key=lambda r: (-(r["wins"] or 0), -(r["fpts"] or 0)))
+        rank = {r["roster_id"]: i for i, r in enumerate(order, 1)}
+        places = bracket_places(store, lg["league_id"]) if lg["status"] == "complete" else {}
+        effs = [(r["fpts"] or 0) / r["max_pf"] for r in rows if r["max_pf"]]
+        league_eff = sum(effs) / len(effs) if effs else None
+        for r in rows:
+            if not r["owner_id"]:
+                continue
+            seasons[r["owner_id"]].append({
+                "season": lg["season"], "wins": r["wins"] or 0, "losses": r["losses"] or 0, "ties": r["ties"] or 0,
+                "pf": round(r["fpts"] or 0, 1), "rank": rank[r["roster_id"]], "place": places.get(r["roster_id"]),
+                "eff": round((r["fpts"] or 0) / r["max_pf"], 3) if r["max_pf"] else None,
+                "league_eff": round(league_eff, 3) if league_eff else None, "complete": lg["status"] == "complete"})
+
+    # rookie drafts in this league: what each manager's picks are worth now
+    vd = store.query("SELECT MAX(snapshot_date) d FROM player_value")[0]["d"]
+    val = {r["player_id"]: r["value"] or 0.0 for r in store.query(
+        "SELECT player_id, value FROM player_value WHERE snapshot_date=?", (vd,))}
+    pname = {r["player_id"]: r["full_name"] for r in store.query("SELECT player_id, full_name FROM player")}
+    rookie = defaultdict(list)
+    by_round = defaultdict(list)
+    for d in store.query("SELECT draft_id, season FROM draft WHERE player_type=1 AND status='complete'"):
+        for p in store.query("SELECT pick_no, round, picked_by, player_id FROM draft_pick_made WHERE draft_id=? ORDER BY pick_no",
+                             (d["draft_id"],)):
+            v = val.get(p["player_id"], 0.0)
+            by_round[p["round"]].append(v)
+            if p["picked_by"]:
+                rookie[p["picked_by"]].append({"season": d["season"], "round": p["round"], "pick_no": p["pick_no"],
+                                               "id": p["player_id"], "name": pname.get(p["player_id"]),
+                                               "value": round(v)})
+    round_avg = {r: sum(v) / len(v) for r, v in by_round.items() if v}
+
+    result = {}
+    uids = set(out) | set(act) | set(seasons) | set(rookie)
+    for uid in uids:
+        t = out[uid]["tr"]
+        n = t["won"] + t["lost"] + t["even"]
+        picks_made = rookie.get(uid, [])
+        exp = sum(round_avg.get(p["round"], 0) for p in picks_made)
+        got = sum(p["value"] for p in picks_made)
+        result[uid] = {
+            "trade_record": {"won": t["won"], "lost": t["lost"], "even": t["even"]},
+            "avg_margin": round(sum(t["margins"]) / n) if n else None,
+            "best_trade": t["best"][0] if t["best"] else None, "best_margin": t["best"][1] if t["best"] else None,
+            "worst_trade": t["worst"][0] if t["worst"] else None, "worst_margin": t["worst"][1] if t["worst"] else None,
+            "got_pos": dict(t["got_pos"]), "gave_pos": dict(t["gave_pos"]),
+            "got_age": round(sum(t["got_age"]) / len(t["got_age"]), 1) if t["got_age"] else None,
+            "gave_age": round(sum(t["gave_age"]) / len(t["gave_age"]), 1) if t["gave_age"] else None,
+            "picks": {"got": t["got_picks"], "gave": t["gave_picks"], "firsts_got": t["got_firsts"], "firsts_gave": t["gave_firsts"]},
+            "pieces": {"got": round(sum(t["pieces_got"]) / n, 2) if n else None,
+                       "gave": round(sum(t["pieces_gave"]) / n, 2) if n else None},
+            "timing": {"in_season": t["in_season"], "offseason": t["offseason"]},
+            "vs": sorted(({"team": names.get(o, {}).get("team"), "owner": names.get(o, {}).get("owner"), "n": c,
+                           "net": round(net)} for o, (c, net) in t["vs"].items()), key=lambda x: -x["n"]),
+            "last_move": act[uid]["last"] or None, "last_move_type": act[uid]["last_type"],
+            "moves_30d": act[uid]["recent"],
+            "seasons": seasons.get(uid, []),
+            "rookie_picks": sorted(picks_made, key=lambda p: (p["season"], p["pick_no"]), reverse=True)[:12],
+            "rookie_score": round(got / exp, 2) if exp else None,
+        }
+    return result
+
+
 def build(store: Store) -> dict:
     lg = store.query("SELECT * FROM league_season WHERE is_current=1")[0]
     cur = lg["league_id"]
@@ -234,6 +368,7 @@ def build(store: Store) -> dict:
         "SELECT user_id FROM owner_league WHERE league_id NOT IN (SELECT league_id FROM league_season)"))
     windows = {r["roster_id"]: r["window"] for r in store.query("SELECT roster_id, window FROM team_window")}
 
+    scout = _scouting(store, log, owner_of, names)
     rows = []
     trade_counts = [prof[u]["trades"] for u in current_owners]
     avg_trades = sum(trade_counts) / len(trade_counts) if trade_counts else 0
@@ -267,6 +402,26 @@ def build(store: Store) -> dict:
             for k in SKILL:
                 if share.get(k, 0) - base_share.get(k, 0) >= 0.12:
                     tags.append(f"Drafts {k}s early")
+        sc = scout.get(uid, {})
+        if sc.get("got_age") and sc.get("gave_age"):
+            if sc["gave_age"] - sc["got_age"] >= 2:
+                tags.append("Trades for youth")
+            elif sc["got_age"] - sc["gave_age"] >= 2:
+                tags.append("Trades for veterans")
+        pcs = sc.get("pieces") or {}
+        if p["trades"] >= 3 and pcs.get("got") and pcs.get("gave"):
+            if pcs["gave"] - pcs["got"] >= 0.5:
+                tags.append("Consolidates (2-for-1s)")
+            elif pcs["got"] - pcs["gave"] >= 0.5:
+                tags.append("Splits stars into depth")
+        cur_season = next((x for x in reversed(sc.get("seasons", [])) if not x["complete"]), None)
+        if cur_season and cur_season.get("eff") and cur_season.get("league_eff"):
+            if cur_season["eff"] - cur_season["league_eff"] >= 0.04:
+                tags.append("Sharp lineup setter")
+            elif cur_season["league_eff"] - cur_season["eff"] >= 0.05:
+                tags.append("Leaves points on the bench")
+        if sc.get("moves_30d") == 0:
+            tags.append("Quiet lately")
         rid = roster_of_owner.get(uid)
         rows.append({
             "user_id": uid, "roster_id": rid,
@@ -282,6 +437,7 @@ def build(store: Store) -> dict:
             "draft_mix_other_leagues": json.dumps(share), "other_draft_picks": n_mix,
             "other_leagues": other_leagues.get(uid, 0),
             "tags": json.dumps(tags),
+            "scout": json.dumps(scout.get(uid, {})),
         })
     store.write_frame("owner_profile", rows)
     store.conn.execute("DROP TABLE IF EXISTS trade_review")  # shape changed: sides now carry full asset detail

@@ -81,6 +81,17 @@ class Phase4PipelineTest(Phase3PipelineTest):
         self.assertEqual(json.loads(me["acquired_positions"]), {"WR": 1})
         tags = json.loads(me["tags"])
         self.assertIn("Big FAAB spender", tags)
+        sc = json.loads(me["scout"])
+        rec = sc["trade_record"]
+        self.assertEqual(rec["won"] + rec["lost"] + rec["even"], 1)
+        self.assertEqual(sc["picks"]["gave"], 1)          # sent the 2027 1st
+        self.assertEqual(sc["picks"]["firsts_gave"], 1)
+        self.assertEqual(sc["got_pos"], {"WR": 1})
+        self.assertEqual(sc["pieces"], {"got": 1.0, "gave": 2.0})   # Jefferson for a player + a pick
+        self.assertTrue(sc["last_move"])
+        self.assertTrue(sc["seasons"])
+        self.assertIn("eff", sc["seasons"][-1])
+        self.assertEqual(sc["vs"][0]["n"], 1)
 
     def test_trade_review(self):
         rows = self.q("SELECT * FROM trade_review")
