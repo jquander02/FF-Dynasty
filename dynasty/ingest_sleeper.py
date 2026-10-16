@@ -218,6 +218,18 @@ def ingest_matchups(store: Store, client: SleeperClient, league_id: str, weeks, 
     return n
 
 
+def ingest_schedule(store: Store, client: SleeperClient, league_id: str, first_week: int, last_week: int) -> int:
+    """Store pairings for upcoming regular-season weeks (points not played yet)."""
+    rows = []
+    for week in range(max(1, first_week), last_week + 1):
+        for m in client.matchups(league_id, week, ttl=DAY):
+            if m.get("matchup_id") is not None:
+                rows.append({"league_id": league_id, "week": week, "roster_id": m["roster_id"],
+                             "matchup_id": m["matchup_id"]})
+    store.delete("schedule", "league_id=?", (league_id,))
+    return store.upsert("schedule", rows)
+
+
 def transaction_rows(league_id: str, season: str, t: dict) -> tuple[dict, list[dict]]:
     tid = str(t["transaction_id"])
     row = {
@@ -582,6 +594,10 @@ def run(
         res.add("drafts", len(drafts))
         if is_current:
             res.add("future_picks", build_pick_ownership(store, league, drafts, traded))
+            st = league.get("settings") or {}
+            scored = int(st.get("last_scored_leg") or 0)
+            playoffs = int(st.get("playoff_week_start") or 15)
+            res.add("schedule", ingest_schedule(store, client, lid, scored + 1, playoffs - 1))
         if finished:
             store.mark_done(done_key)
         store.commit()

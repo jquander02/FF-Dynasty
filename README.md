@@ -5,11 +5,17 @@ Phase 1 is the data foundation: it pulls everything Sleeper and nflverse publish
 database, refreshes it on a schedule in GitHub's cloud, and publishes an app you can install
 on your iPhone and Windows PC.
 
-**What's in the app now:** standings with roster value, age and FAAB left · every team's
-roster with player values · a Values board (all players, filter by position and owner,
-model-vs-market flags) · who owns every 2027–2029 rookie pick · recent transactions ·
-season history. Pick values and the rebuild planner (phase 3) and the trade lab and owner
-profiles (phase 4) build on this.
+**What's in the app now:**
+- **League:** standings with playoff odds, roster value and each team's contention window, plus a
+  chart of every team's strength now vs. the next two seasons
+- **Team:** any roster with player values, ages and model-vs-market flags
+- **Values:** every player ranked by dynasty value, filterable by position and owner
+- **Picks:** every 2027–2029 pick with its projected slot, top-3 odds and value
+- **Plan:** your rebuild planner: tank odds, your picks, who to sell before their age cliff
+  (and which contenders need them), young buy targets on other teams' benches, your core
+- **Activity / History:** recent transactions; seasons and champions
+
+Trade lab and owner profiles come in phase 4.
 
 ## How player values work (phase 2)
 
@@ -31,6 +37,27 @@ profiles (phase 4) build on this.
 
 Tables: `player_week`, `player_season`, `age_curve`, `draft_prior`, `player_projection`,
 `market_value` (dated), `player_value` (dated, so value trends build up over time).
+
+## Windows, draft odds and pick values (phase 3)
+
+- **Team strength:** each roster's best starting lineup by projected points per game, for the
+  rest of this season (injured players left out), next season, and two seasons out.
+  Labels: *Dynasty power* (top third now and later), *Win now*, *Rising*, *Rebuild*, *Middle*.
+- **Draft odds:** the rest of the regular season is simulated 10,000 times on Sleeper's real
+  schedule. Weekly scores are drawn around a mix of points scored so far and projected lineup
+  strength, with spread measured from this league's own matchups. The rookie draft is assumed
+  linear, worst record first (ties by points for); the refresh summary checks that rule
+  against the last rookie draft. Drafts after next use projected strength plus wide noise.
+- **Pick value:** 60% from what this league's past rookie picks are worth now at each
+  overall pick (fitted curve, discounted 10% per year out), 40% from FantasyCalc and
+  DynastyProcess pick values; averaged over the slot odds.
+- **Plan:** sell candidates are your veterans at their position's age cliff (QB 32, RB 26,
+  WR 28, TE 29) or projected to drop 15%+ in two seasons, with the contenders whose lineup
+  they'd upgrade most; buy targets are players 24 or younger outside their team's best
+  lineup, contenders' benches first.
+
+Tables: `schedule`, `team_window`, `season_sim`, `pick_value`. Quick refreshes on game days
+redo windows, odds and pick values with the latest scores.
 
 ---
 

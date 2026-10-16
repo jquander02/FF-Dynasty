@@ -78,6 +78,12 @@ CREATE TABLE IF NOT EXISTS matchup (
     PRIMARY KEY (league_id, week, roster_id)
 );
 
+-- Future regular-season pairings for the current season (Sleeper publishes them ahead).
+CREATE TABLE IF NOT EXISTS schedule (
+    league_id TEXT, week INTEGER, roster_id INTEGER, matchup_id INTEGER,
+    PRIMARY KEY (league_id, week, roster_id)
+);
+
 CREATE TABLE IF NOT EXISTS matchup_player (
     league_id TEXT, week INTEGER, roster_id INTEGER, player_id TEXT,
     points REAL, is_starter INTEGER,

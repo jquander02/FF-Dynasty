@@ -7,6 +7,7 @@ import time
 from datetime import date
 from pathlib import Path
 
+from . import planner
 from .store import Store
 
 SKILL = ("QB", "RB", "WR", "TE")
@@ -120,6 +121,33 @@ def run(store: Store, site_dir: Path) -> dict[str, int]:
     for i, t in enumerate(sorted(teams, key=lambda x: -x["value"]), 1):
         t["value_rank"] = i if t["value"] else None
 
+    # ---- windows, season odds, pick values (phase 3) ---------------------------
+    pick_extra = {}
+    if _table(store, "pick_value"):
+        for r in store.query("SELECT * FROM pick_value"):
+            pick_extra[(r["season"], r["round"], r["original_roster_id"])] = {
+                "value": r["value"], "exp_slot": r["exp_slot"], "p_top3": r["p_top3"], "p_slot1": r["p_slot1"],
+                "model_value": r["model_value"], "market_value": r["market_value"],
+                "odds": json.loads(r["slot_odds"] or "[]"),
+            }
+    if _table(store, "team_window"):
+        tw = {r["roster_id"]: dict(r) for r in store.query("SELECT * FROM team_window")}
+        sim = {r["roster_id"]: dict(r) for r in store.query("SELECT * FROM season_sim")} if _table(store, "season_sim") else {}
+        for t in teams:
+            w = tw.get(t["roster_id"], {})
+            s_ = sim.get(t["roster_id"], {})
+            t.update({
+                "window": w.get("window"),
+                "strength": [w.get("strength_now"), w.get("strength_next"), w.get("strength_later")],
+                "ranks": [w.get("rank_now"), w.get("rank_next"), w.get("rank_later")],
+                "value_age": [w.get("value_young"), w.get("value_prime"), w.get("value_veteran")],
+                "pick_value": w.get("pick_value"),
+                "total_assets": w.get("total_assets"),
+                "p_playoffs": s_.get("p_playoffs"),
+                "exp_wins": s_.get("exp_wins"),
+                "p_first_pick": s_.get("p_first_pick"),
+            })
+
     # ---- future picks -------------------------------------------------------
     picks = [
         {
@@ -130,6 +158,7 @@ def run(store: Store, site_dir: Path) -> dict[str, int]:
             "owner": r["owner_roster_id"],
             "owner_team": name_of.get(r["owner_roster_id"]),
             "traded": bool(r["traded"]),
+            **pick_extra.get((r["season"], r["round"], r["original_roster_id"]), {}),
         }
         for r in store.query("SELECT * FROM draft_pick_owned ORDER BY season, round, original_roster_id")
     ]
@@ -248,6 +277,8 @@ def run(store: Store, site_dir: Path) -> dict[str, int]:
             "trend": round(v["value"] - prev_val[pid]) if pid in prev_val else None,
         })
     _write(out, "values.json", value_list)
+    plan = planner.build(store) if _table(store, "pick_value") else {}
+    _write(out, "plan.json", plan)
     return {"teams": len(teams), "picks": len(picks), "activity": len(activity), "seasons": len(history),
             "values": len(value_list)}
 

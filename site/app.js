@@ -20,7 +20,7 @@
   };
 
   async function load() {
-    const files = ["meta", "teams", "rosters", "picks", "activity", "history", "values"];
+    const files = ["meta", "teams", "rosters", "picks", "activity", "history", "values", "plan"];
     const got = await Promise.all(
       files.map((f) => fetch(`data/${f}.json`, { cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).catch(() => null))
     );
@@ -58,20 +58,56 @@
       </div>
       <h2>Standings</h2>
       <div class="table-wrap"><table>
-        <thead><tr><th>#</th><th>Team</th><th class="num">W-L</th><th class="num">PF</th><th class="num">Max PF</th><th class="num">Value</th><th class="num">Age</th><th class="num">FAAB</th></tr></thead>
+        <thead><tr><th>#</th><th>Team</th><th class="num">W-L</th><th class="num">PF</th><th class="num">Playoffs</th><th class="num">Value</th><th class="num">Age</th><th class="num">FAAB</th></tr></thead>
         <tbody>${teams.map((t, i) => `
           <tr class="${t.is_me ? "me" : ""}">
             <td>${i + 1}</td>
-            <td class="team-cell"><a href="#team" data-roster="${t.roster_id}">${esc(t.team)}</a><div class="pmeta">${esc(t.owner || "")}</div></td>
+            <td class="team-cell"><a href="#team" data-roster="${t.roster_id}">${esc(t.team)}</a><div class="pmeta">${t.window ? `<span class="win ${winCls(t.window)}">${esc(t.window)}</span>` : esc(t.owner || "")}</div></td>
             <td class="num">${t.wins}-${t.losses}${t.ties ? "-" + t.ties : ""}</td>
             <td class="num">${fmt(t.pf, 1)}</td>
-            <td class="num">${fmt(t.max_pf, 1)}</td>
+            <td class="num">${pct(t.p_playoffs)}</td>
             <td class="num">${t.value ? `${fmt(t.value / 1000, 1)}k <span class="pmeta">${ordinal(t.value_rank)}</span>` : "–"}</td>
             <td class="num">${t.avg_age ?? "–"}</td>
             <td class="num">$${fmt(t.faab_left)}</td>
           </tr>`).join("")}</tbody>
       </table></div>
+      ${windowChart(teams)}
+      <p class="foot"><a href="#history">League history and champions →</a></p>
       <p class="foot">${s.teams} teams · ${s.ppr === 1 ? "full PPR" : s.ppr + " PPR"} · ${s.taxi_slots} taxi · trade deadline wk ${s.trade_deadline} · ${s.playoff_teams}-team playoffs from wk ${s.playoff_week_start}</p>`;
+  }
+
+  const winCls = (w) => ({ "Dynasty power": "w-power", "Win now": "w-now", "Rising": "w-rise", "Rebuild": "w-reb" }[w] || "w-mid");
+
+  // Strength now (x) vs strength over the next two seasons (y), one dot per team.
+  function windowChart(teams) {
+    const pts = teams.filter((t) => t.strength && t.strength[0] != null);
+    if (pts.length < 2) return "";
+    const W = 340, H = 260, L = 34, B = 30, T = 14, R = 12;
+    const xs = pts.map((t) => t.strength[0]);
+    const ys = pts.map((t) => (t.strength[1] + t.strength[2]) / 2);
+    const [x0, x1] = [Math.min(...xs), Math.max(...xs)];
+    const [y0, y1] = [Math.min(...ys), Math.max(...ys)];
+    const px = (v) => L + ((v - x0) / (x1 - x0 || 1)) * (W - L - R);
+    const py = (v) => H - B - ((v - y0) / (y1 - y0 || 1)) * (H - B - T);
+    const med = (a) => { const b = [...a].sort((p, q) => p - q); return (b[(b.length - 1) >> 1] + b[b.length >> 1]) / 2; };
+    const mx = px(med(xs)), my = py(med(ys));
+    const short = (n) => (n.length > 11 ? n.slice(0, 10) + "…" : n);
+    return `
+      <h2>Contention windows</h2>
+      <div class="card chart">
+        <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Team strength now versus the next two seasons">
+          <line x1="${mx}" y1="${T}" x2="${mx}" y2="${H - B}" class="grid"/>
+          <line x1="${L}" y1="${my}" x2="${W - R}" y2="${my}" class="grid"/>
+          <text x="${W - R}" y="${T + 10}" text-anchor="end" class="ql">Dynasty power</text>
+          <text x="${L + 4}" y="${T + 10}" class="ql">Rising</text>
+          <text x="${W - R}" y="${H - B - 6}" text-anchor="end" class="ql">Win now</text>
+          <text x="${L + 4}" y="${H - B - 6}" class="ql">Rebuild</text>
+          <text x="${(L + W - R) / 2}" y="${H - 6}" text-anchor="middle" class="ax">Lineup strength now →</text>
+          <text x="10" y="${(T + H - B) / 2}" text-anchor="middle" class="ax" transform="rotate(-90 10 ${(T + H - B) / 2})">Next two seasons →</text>
+          ${pts.map((t, i) => `<g class="${t.is_me ? "me" : ""}"><circle cx="${px(xs[i])}" cy="${py(ys[i])}" r="${t.is_me ? 6 : 4.5}"/>
+            <text x="${px(xs[i]) + (px(xs[i]) > W - 90 ? -8 : 8)}" y="${py(ys[i]) + 3.5}" text-anchor="${px(xs[i]) > W - 90 ? "end" : "start"}" class="lbl">${esc(short(t.team))}</text></g>`).join("")}
+        </svg>
+      </div>`;
   }
 
   // ---------------------------------------------------------------- Team
@@ -173,7 +209,7 @@
     const mineBySeason = seasons.map((s) => [s, all.filter((p) => p.season === s && p.owner === me)]);
     return `
       <div class="stats">
-        ${mineBySeason.map(([s, l]) => `<div class="stat"><b>${l.length}</b><span>Your ${s} picks · ${l.filter((p) => p.round === 1).length} firsts</span></div>`).join("")}
+        ${mineBySeason.map(([s, l]) => `<div class="stat"><b>${fmt(l.reduce((a, p) => a + (p.value || 0), 0))}</b><span>${s}: ${l.length} picks, ${l.filter((p) => p.round === 1).length} firsts</span></div>`).join("")}
       </div>
       <div class="controls"><div class="seg" role="group" aria-label="Show">
         <button data-pf="mine" class="${pickFilter === "mine" ? "on" : ""}">Yours</button>
@@ -185,14 +221,50 @@
         return `<div class="card"><h2>${s} rookie draft</h2>
           ${rows.length ? rows.map((p) => `
             <div class="pick ${p.owner === me ? "mine" : ""}">
-              <span class="lbl">R${p.round}</span>
-              <span class="from">${p.traded ? `via ${esc(p.from_team)}` : "own pick"}</span>
-              ${pickFilter === "all" ? `<span>${esc(p.owner_team)}</span>` : ""}
+              <span class="lbl">${p.exp_slot ? `${p.round}.${String(Math.round(p.exp_slot)).padStart(2, "0")}` : `R${p.round}`}</span>
+              <span class="from">${p.traded ? `via ${esc(p.from_team)}` : "own"}${pickFilter === "all" ? ` → ${esc(p.owner_team)}` : ""}<span class="pmeta">${p.p_top3 != null && p.round === 1 ? ` · top-3 ${pct(p.p_top3)}` : ""}</span></span>
+              <span class="pv">${p.value != null ? fmt(p.value) : ""}</span>
             </div>`).join("") : `<p class="muted">No picks this year.</p>`}
         </div>`;
       }).join("")}
       </div>
-      <p class="foot">Projected slots and pick values arrive in phase 3.</p>`;
+      <p class="foot">Slot shown is the projected pick (e.g. 1.03). Next year's order comes from simulating the rest of this season on the real schedule, worst record picks first; later years from projected team strength. Value = 60% this league's past rookie picks, 40% market pick values.</p>`;
+  }
+
+  // ---------------------------------------------------------------- Plan
+  function renderPlan() {
+    const P = D.plan;
+    if (!P || !P.roster_id) return `<div class="empty">The plan appears after the next full refresh.</div>`;
+    const pcard = (c, extra = "") => `
+      <div class="player">
+        <div class="pos ${esc(c.pos)}">${esc(c.pos)}</div>
+        <div><div class="pname">${esc(c.name)}${signal({ model: c.model, fc: c.market })}</div>
+          <div class="pmeta">${esc(c.nfl || "FA")} · age ${c.age ?? "–"} · ${c.ppg_now ?? "–"} → ${c.ppg_2y ?? "–"} ppg${extra}</div></div>
+        <div class="age"><b>${fmt(c.val)}</b><span class="pmeta">value</span></div>
+      </div>`;
+    const firsts = (P.my_picks || []).filter((p) => p.round === 1);
+    return `
+      <div class="stats">
+        <div class="stat"><b>${esc(P.record)}</b><span>Record · ${P.exp_wins ?? "–"} projected wins</span></div>
+        <div class="stat"><b>${pct(P.p_first_pick)}</b><span>Chance of worst record (1.01)</span></div>
+        <div class="stat"><b>${P.exp_slot ? P.exp_slot.toFixed(1) : "–"}</b><span>Projected draft slot · top-3 ${pct(P.p_top3)}</span></div>
+        <div class="stat"><b>${P.weeks_to_deadline ?? "–"}</b><span>Weeks to trade deadline (wk ${P.trade_deadline_week ?? "–"})</span></div>
+      </div>
+      <div class="card">
+        <div class="txn-head"><span class="txn-type">Your window</span><span>${P.window ? `<span class="win ${winCls(P.window)}">${esc(P.window)}</span>` : ""}</span></div>
+        <div class="move">Lineup strength rank: <b>${ordinal(P.ranks.rank_now)}</b> now, ${ordinal(P.ranks.rank_next)} next year, ${ordinal(P.ranks.rank_later)} in two years.</div>
+        <div class="move">Assets: ${fmt(P.assets.players)} in players + ${fmt(P.assets.picks)} in picks = <b>${fmt(P.assets.total)}</b>.</div>
+        ${firsts.length ? `<div class="move">Your firsts: ${firsts.map((p) => `${p.season} ${p.own ? "own" : `via ${esc(p.from)}`} (~${p.exp_slot ? p.exp_slot.toFixed(1) : "?"})`).join(", ")}.</div>` : `<div class="move">You own no first-round picks in the next three drafts.</div>`}
+      </div>
+      <h2>Sell before the cliff</h2>
+      <div class="card">${(P.sell || []).map((c) => pcard(c,
+        `${c.past_cliff ? " · past age cliff" : ""}${c.projected_drop > 0 ? ` · −${Math.round(c.projected_drop * 100)}% in 2 yrs` : ""}${c.buyers.length ? `<br>Upgrade for: ${c.buyers.map((b) => `${esc(b.team)} (+${b.upgrade_ppg})`).join(", ")}` : ""}`
+      )).join("") || `<p class="muted">No veterans worth selling right now.</p>`}</div>
+      <h2>Buy: young players on benches</h2>
+      <div class="card">${(P.buy || []).map((c) => pcard(c, ` · ${esc(c.team)}${c.owner_window ? ` (${esc(c.owner_window)})` : ""}`)).join("") || `<p class="muted">No targets found.</p>`}</div>
+      <h2>Your young core</h2>
+      <div class="card">${(P.core || []).map((c) => pcard(c)).join("") || `<p class="muted">No players under 25 with value yet.</p>`}</div>
+      <p class="foot">Sell: veterans at their position's age cliff (QB 32, RB 26, WR 28, TE 29) or projected to lose 15%+ in two seasons, with contenders whose starting lineup they'd upgrade most. Buy: players 24 or younger outside their team's best lineup, contenders' benches first. “ppg” shows now → two seasons out.</p>`;
   }
 
   // ---------------------------------------------------------------- Activity
@@ -226,10 +298,11 @@
       <p class="foot">Owner tendencies and trade history by manager arrive in phase 4.</p>`;
   }
 
+  const pct = (x) => (x == null ? "–" : x >= 0.995 ? ">99%" : x > 0 && x < 0.005 ? "<1%" : `${Math.round(x * 100)}%`);
   const ordinal = (n) => n + (["th", "st", "nd", "rd"][((n % 100) - 20) % 10] || ["th", "st", "nd", "rd"][n % 100] || "th");
 
   // ---------------------------------------------------------------- router
-  const TABS = { league: renderLeague, team: renderTeam, values: renderValues, picks: renderPicks, activity: renderActivity, history: renderHistory };
+  const TABS = { league: renderLeague, team: renderTeam, values: renderValues, picks: renderPicks, plan: renderPlan, activity: renderActivity, history: renderHistory };
   function route() {
     const tab = (location.hash || "#league").slice(1);
     const fn = TABS[tab] || renderLeague;

@@ -11,7 +11,7 @@ import logging
 import sys
 import time
 
-from . import export, idmap, ingest_sleeper, market, model, nflverse, production, values
+from . import export, idmap, ingest_sleeper, market, model, nflverse, picks, production, teams, values
 from .config import load_config
 from .sleeper import SleeperClient
 from .store import Store
@@ -43,7 +43,8 @@ def main(argv: list[str] | None = None) -> int:
                     continue
                 n = store.query(f"SELECT COUNT(*) c FROM {k}")[0]["c"]
                 print(f"{k:18} {n:>8}")
-            for k in ("market_value", "player_week", "player_season", "player_projection", "player_value"):
+            for k in ("market_value", "player_week", "player_season", "player_projection", "player_value",
+                      "team_window", "season_sim", "pick_value", "schedule"):
                 if store.query("SELECT 1 FROM sqlite_master WHERE name=?", (k,)):
                     print(f"{k:18} {store.query(f'SELECT COUNT(*) c FROM {k}')[0]['c']:>8}")
             nfl = store.query("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'nfl_%'")
@@ -81,6 +82,12 @@ def main(argv: list[str] | None = None) -> int:
                 print("Model: " + ", ".join(f"{k} {v}" for k, v in mo.items()))
                 va = values.build(store, cfg.value_weights)
                 print("Values: " + ", ".join(f"{k} {v}" for k, v in va.items()))
+            # Team windows, season simulation and pick values: cheap, so quick runs redo them too
+            if store.query("SELECT 1 FROM sqlite_master WHERE name='player_value'"):
+                tw = teams.build(store)
+                print(f"Teams: {len(tw)} windows")
+                pk = picks.build(store, cfg.value_weights)
+                print("Picks: " + ", ".join(f"{k} {v}" for k, v in pk.items()))
 
         out = export.run(store, cfg.site_dir)
         print("Export: " + ", ".join(f"{k} {v}" for k, v in out.items()))

@@ -150,7 +150,9 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(champ[0]["winner"], 6)
         # t2 given as {"w": 9} (feeder reference) must not be stored as a roster id
         self.assertIsNone(self.q("SELECT t2 FROM bracket WHERE league_id=? AND round=1", (PREV,))[0]["t2"])
-        self.assertEqual(self.q("SELECT COUNT(DISTINCT week) c FROM matchup WHERE league_id=?", (LEAGUE,))[0]["c"], 5)
+        # weeks 1-5 scored plus the in-progress week 6 (Sleeper returns its pairings with 0 points)
+        self.assertEqual(self.q("SELECT COUNT(DISTINCT week) c FROM matchup WHERE league_id=?", (LEAGUE,))[0]["c"], 6)
+        self.assertEqual(self.q("SELECT COUNT(DISTINCT week) c FROM matchup WHERE league_id=? AND points > 0", (LEAGUE,))[0]["c"], 5)
         self.assertEqual(self.q("SELECT COUNT(DISTINCT week) c FROM matchup WHERE league_id=?", (PREV,))[0]["c"], 17)
 
     def test_owner_cross_league_picks(self):

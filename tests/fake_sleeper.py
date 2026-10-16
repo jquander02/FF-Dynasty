@@ -180,8 +180,13 @@ def build_routes() -> dict:
         "league/OTHER-1/drafts": other_drafts,
         "draft/OTHER-D/picks": other_picks,
     }
+    def future(week):  # Sleeper returns next weeks' pairings with 0 points
+        return [{"roster_id": r["roster_id"], "matchup_id": (r["roster_id"] + week) % 6 + 1,
+                 "points": 0.0, "starters": [], "players": [], "players_points": {}}
+                for r in rosters]
+
     for w in range(1, 19):
-        routes[f"league/{LEAGUE}/matchups/{w}"] = matchups(w) if w <= 5 else []
+        routes[f"league/{LEAGUE}/matchups/{w}"] = matchups(w) if w <= 5 else future(w)
         routes[f"league/{PREV}/matchups/{w}"] = matchups(w) if w <= 17 else []
     for w in range(0, 19):
         routes[f"league/{LEAGUE}/transactions/{w}"] = {2: tx_week2, 3: tx_week3}.get(w, [])
