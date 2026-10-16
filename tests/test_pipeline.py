@@ -240,6 +240,7 @@ class PipelineTest(unittest.TestCase):
         self.assertTrue(any(m["pick"] and m["pick"].startswith("2027 R1") for m in trade["moves"]))
         self.assertFalse(any(a for a in activity if a["type"] == "waiver" and a["moves"][0]["amount"] == 20))
         history = json.loads((d / "history.json").read_text())
+        self.assertEqual(export.run(self.store, site)["seasons"], 2)
         self.assertEqual([h["season"] for h in history], ["2026", "2025"])
         self.assertEqual(history[1]["champion"], "Ladd & the Lads")
 
