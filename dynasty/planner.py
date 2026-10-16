@@ -3,7 +3,8 @@
   Tank tracker  your record, projected wins, odds of the 1.01 and a top-3 pick, and the
                 expected slot of every pick you own
   Sell          veterans near their position's age cliff, or whose projection falls 15%+
-                by two seasons out, with the contenders whose lineup they'd upgrade most
+                by two seasons out, with the buyers (contenders and teams with 40%+ playoff
+                odds) whose lineup they'd upgrade most
   Buy           players 24 or younger sitting on other teams' benches (not in that team's
                 best lineup), contenders first: easiest to pry loose
   Core          your young players to build around
@@ -78,7 +79,9 @@ def build(store: Store) -> dict:
                     out[slot] = p["ppg_ros"]
         return out
 
-    contenders = [rid for rid, t in tw.items() if rid != mine and (t.get("window") in CONTEND or t.get("rank_now", 99) <= 4)]
+    # buyers: contenders plus anyone in the playoff hunt (40%+ playoff odds)
+    contenders = [rid for rid, t in tw.items() if rid != mine and (
+        t.get("window") in CONTEND or t.get("rank_now", 99) <= 4 or (sim.get(rid, {}).get("p_playoffs") or 0) >= 0.4)]
     weak = {rid: weakest(rid) for rid in contenders}
 
     # ---- sell -------------------------------------------------------------------
@@ -153,5 +156,6 @@ def build(store: Store) -> dict:
         "sell": sell[:12],
         "buy": buy[:15],
         "core": core,
-        "contenders": [{"roster_id": r, "team": names.get(r), "window": tw[r].get("window")} for r in contenders],
+        "contenders": [{"roster_id": r, "team": names.get(r), "window": tw[r].get("window"),
+                        "p_playoffs": sim.get(r, {}).get("p_playoffs")} for r in contenders],
     }

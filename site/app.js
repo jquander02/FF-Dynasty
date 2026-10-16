@@ -264,7 +264,7 @@
       <div class="card">${(P.buy || []).map((c) => pcard(c, ` · ${esc(c.team)}${c.owner_window ? ` (${esc(c.owner_window)})` : ""}`)).join("") || `<p class="muted">No targets found.</p>`}</div>
       <h2>Your young core</h2>
       <div class="card">${(P.core || []).map((c) => pcard(c)).join("") || `<p class="muted">No players under 25 with value yet.</p>`}</div>
-      <p class="foot">Sell: veterans at their position's age cliff (QB 32, RB 26, WR 28, TE 29) or projected to lose 15%+ in two seasons, with contenders whose starting lineup they'd upgrade most. Buy: players 24 or younger outside their team's best lineup, contenders' benches first. “ppg” shows now → two seasons out.</p>`;
+      <p class="foot">Sell: veterans at their position's age cliff (QB 32, RB 26, WR 28, TE 29) or projected to lose 15%+ in two seasons, with contenders and playoff-bubble teams whose starting lineup they'd upgrade most. Buy: players 24 or younger outside their team's best lineup, contenders' benches first. “ppg” shows now → two seasons out.</p>`;
   }
 
   // ---------------------------------------------------------------- Activity
