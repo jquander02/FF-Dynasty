@@ -45,7 +45,7 @@ def build(store: Store) -> dict:
     names = {}
     for r in store.query("""SELECT o.user_id, o.display_name, m.team_name FROM owner o
                             LEFT JOIN league_member m ON m.user_id=o.user_id AND m.league_id=?""", (cur,)):
-        names[r["user_id"]] = {"owner": r["display_name"], "team": r["team_name"] or r["display_name"]}
+        names[r["user_id"]] = {"owner": r["display_name"], "team": (r["team_name"] or r["display_name"] or "").strip()}
     current_owners = [r["owner_id"] for r in store.query("SELECT owner_id FROM roster WHERE league_id=? AND owner_id IS NOT NULL", (cur,))]
     roster_of_owner = {r["owner_id"]: r["roster_id"] for r in store.query("SELECT roster_id, owner_id FROM roster WHERE league_id=?", (cur,))}
 

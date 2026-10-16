@@ -55,7 +55,7 @@ def run(store: Store, site_dir: Path) -> dict[str, int]:
     name_of = {}
     my_roster = None
     for r in rows:
-        label = r["team_name"] or r["display_name"] or f"Team {r['roster_id']}"
+        label = (r["team_name"] or r["display_name"] or f"Team {r['roster_id']}").strip()
         name_of[r["roster_id"]] = label
         is_me = r["owner_id"] == my_user or (my_user and my_user in (r["co_owners"] or ""))
         if is_me:
@@ -181,7 +181,7 @@ def run(store: Store, site_dir: Path) -> dict[str, int]:
     ):
         moves = []
         for m in store.query("SELECT * FROM txn_move WHERE transaction_id=? ORDER BY seq", (t["transaction_id"],)):
-            nm = pname.get(m["player_id"], (m["player_id"], None))
+            nm = pname.get(m["player_id"], (f"Player {m['player_id']}" if m["player_id"] else None, None))
             moves.append(
                 {
                     "kind": m["kind"],
@@ -261,6 +261,19 @@ def run(store: Store, site_dir: Path) -> dict[str, int]:
         for r in store.query("SELECT player_id, full_name, position, team, age, birth_date, years_exp FROM player "
                              "WHERE position IN ('QB','RB','WR','TE')")
     }
+    # last 30 daily value snapshots, for the trend line in the player sheet
+    hist_dates, history = [], {}
+    if _table(store, "player_value"):
+        hist_dates = [r["snapshot_date"] for r in store.query(
+            "SELECT DISTINCT snapshot_date FROM player_value ORDER BY snapshot_date DESC LIMIT 30")][::-1]
+        if len(hist_dates) > 1:
+            for r in store.query(
+                f"SELECT player_id, snapshot_date, value FROM player_value WHERE snapshot_date IN ({','.join('?' * len(hist_dates))})",
+                tuple(hist_dates),
+            ):
+                history.setdefault(r["player_id"], {})[r["snapshot_date"]] = r["value"]
+    meta["value_dates"] = hist_dates
+    _write(out, "meta.json", meta)
     ranked = sorted(vals.items(), key=lambda kv: kv[1]["overall_rank"])
     value_list = []
     for pid, v in ranked:
@@ -275,6 +288,8 @@ def run(store: Store, site_dir: Path) -> dict[str, int]:
             "owner": owner_of.get(pid),
             **_value_fields(pid, vals, proj, cur_ppg),
             "trend": round(v["value"] - prev_val[pid]) if pid in prev_val else None,
+            "h": [round(history[pid][d]) if d in history.get(pid, {}) else None for d in hist_dates]
+                 if len(hist_dates) > 1 else [],
         })
     _write(out, "values.json", value_list)
     plan = planner.build(store) if _table(store, "pick_value") else {}

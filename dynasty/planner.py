@@ -37,7 +37,7 @@ def build(store: Store) -> dict:
     tw = {r["roster_id"]: dict(r) for r in store.query("SELECT * FROM team_window")}
     sim = {r["roster_id"]: dict(r) for r in store.query("SELECT * FROM season_sim")}
     names = {
-        r["roster_id"]: r["n"] for r in store.query(
+        r["roster_id"]: (r["n"] or "").strip() for r in store.query(
             """SELECT r.roster_id, COALESCE(m.team_name, o.display_name) n FROM roster r
                LEFT JOIN owner o ON o.user_id=r.owner_id
                LEFT JOIN league_member m ON m.league_id=r.league_id AND m.user_id=r.owner_id

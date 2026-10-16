@@ -5,25 +5,29 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Dynasty Analyzer</title>
   <meta name="description" content="Year-round analysis for a Sleeper dynasty league">
-  <meta name="theme-color" content="#0f1a14" media="(prefers-color-scheme: dark)">
-  <meta name="theme-color" content="#f4f6f3" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0d1410" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#edf1ec" media="(prefers-color-scheme: light)">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png" type="image/png">
-  <!-- iPhone home-screen app -->
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Dynasty">
+  <link rel="preload" href="fonts/BigShouldersDisplay.woff" as="font" type="font/woff" crossorigin>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <a class="skip" href="#view">Skip to content</a>
   <header class="top">
     <div class="brand">
-      <h1 id="league-name">Dynasty Analyzer</h1>
-      <p id="league-sub" class="muted">Loading…</p>
+      <h1 id="league-name">Dynasty</h1>
+      <p id="league-sub" class="sub">Loading your league…</p>
     </div>
-    <nav class="tabs" id="tabs" aria-label="Sections">
+    <button id="refresh" class="icon-btn" type="button" aria-label="Reload data">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5"/></svg>
+    </button>
+    <nav class="tabs" aria-label="Sections">
       <a href="#league" data-tab="league">League</a>
       <a href="#team" data-tab="team">Team</a>
       <a href="#values" data-tab="values">Values</a>
@@ -31,21 +35,31 @@
       <a href="#plan" data-tab="plan">Plan</a>
       <a href="#trade" data-tab="trade">Trade</a>
       <a href="#owners" data-tab="owners">Owners</a>
-      <a href="#activity" data-tab="activity">Activity</a>
-      <a href="#history" data-tab="history">History</a>
+      <a href="#activity" data-tab="activity">Moves</a>
     </nav>
   </header>
 
-  <main id="view" tabindex="-1"></main>
+  <main id="view" tabindex="-1" aria-live="polite"></main>
 
-  <nav class="tabbar" id="tabbar" aria-label="Sections">
-    <a href="#league" data-tab="league"><span class="ic">▤</span>League</a>
-    <a href="#team" data-tab="team"><span class="ic">◉</span>Team</a>
-    <a href="#values" data-tab="values"><span class="ic">$</span>Values</a>
-    <a href="#picks" data-tab="picks"><span class="ic">◇</span>Picks</a>
-    <a href="#plan" data-tab="plan"><span class="ic">✓</span>Plan</a>
-    <a href="#trade" data-tab="trade"><span class="ic">⇄</span>Trade</a>
+  <nav class="tabbar" aria-label="Sections">
+    <a href="#league" data-tab="league">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>League</a>
+    <a href="#team" data-tab="team">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4l7 3v5c0 4-3 7-7 8-4-1-7-4-7-8V7z"/></svg>Team</a>
+    <a href="#values" data-tab="values">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19V11M12 19V5M19 19v-6"/></svg>Values</a>
+    <a href="#picks" data-tab="picks">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 9-8 9-8-9z"/></svg>Picks</a>
+    <a href="#plan" data-tab="plan">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l4 4 10-10"/></svg>Plan</a>
+    <a href="#trade" data-tab="trade">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h14l-3-3M20 16H6l3 3"/></svg>Trade</a>
   </nav>
+
+  <div id="sheet" class="sheet" hidden>
+    <div class="sheet-backdrop" data-close="1"></div>
+    <section class="sheet-panel" role="dialog" aria-modal="true" aria-labelledby="sheet-title" tabindex="-1"></section>
+  </div>
 
   <script src="app.js"></script>
 </body>

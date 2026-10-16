@@ -90,7 +90,7 @@ def load(store: Store) -> Ctx:
            LEFT JOIN owner o ON o.user_id=r.owner_id
            LEFT JOIN league_member m ON m.league_id=r.league_id AND m.user_id=r.owner_id
            WHERE r.league_id=?""", (lid,)):
-        ctx.names[r["roster_id"]] = r["n"]
+        ctx.names[r["roster_id"]] = (r["n"] or "").strip()
     return ctx
 
 

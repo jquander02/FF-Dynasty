@@ -1,8 +1,8 @@
-// Offline support: app shell cached; data is network-first so it's always fresh when online.
-const SHELL = "dynasty-shell-v4";
-const DATA = "dynasty-data";
+// Offline support: the app shell is cached; data is network-first, falling back to the last copy.
+const SHELL = "dynasty-shell-v5";
+const DATA = "dynasty-data-v2";
 const SHELL_FILES = ["./", "index.html", "styles.css", "app.js", "manifest.webmanifest",
-  "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
+  "fonts/BigShouldersDisplay.woff", "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(SHELL).then((c) => c.addAll(SHELL_FILES)).then(() => self.skipWaiting()));
@@ -21,22 +21,28 @@ self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET" || url.origin !== location.origin) return;
 
   if (url.pathname.includes("/data/")) {
+    // store under the path without the cache-busting query so offline can find it
+    const key = new Request(url.origin + url.pathname);
     e.respondWith(
       fetch(e.request)
         .then((res) => {
-          const copy = res.clone();
-          caches.open(DATA).then((c) => c.put(e.request, copy));
+          if (res.ok) {
+            const copy = res.clone();
+            caches.open(DATA).then((c) => c.put(key, copy));
+          }
           return res;
         })
-        .catch(() => caches.match(e.request))
+        .catch(() => caches.match(key))
     );
     return;
   }
   e.respondWith(
     fetch(e.request)
       .then((res) => {
-        const copy = res.clone();
-        caches.open(SHELL).then((c) => c.put(e.request, copy));
+        if (res.ok) {
+          const copy = res.clone();
+          caches.open(SHELL).then((c) => c.put(e.request, copy));
+        }
         return res;
       })
       .catch(() => caches.match(e.request).then((r) => r || caches.match("index.html")))

@@ -1,24 +1,34 @@
 # Dynasty Analyzer
 
 A year-round analysis tool for the **Dynasty** league on Sleeper (league `1312163152787443712`).
-Phase 1 is the data foundation: it pulls everything Sleeper and nflverse publish into one
-database, refreshes it on a schedule in GitHub's cloud, and publishes an app you can install
-on your iPhone and Windows PC.
+It pulls everything Sleeper and nflverse publish into one database, values every player and
+pick for this league's exact settings, refreshes itself on a schedule in GitHub's cloud, and
+publishes an app you can install on your iPhone and Windows PC.
 
-**What's in the app now:**
-- **League:** standings with playoff odds, roster value and each team's contention window, plus a
-  chart of every team's strength now vs. the next two seasons
-- **Team:** any roster with player values, ages and model-vs-market flags
-- **Values:** every player ranked by dynasty value, filterable by position and owner
+**App:** https://jquander02.github.io/FF-Dynasty/
+
+## What's in the app
+
+- **League:** scoreboard (record, playoff odds, roster value rank, FAAB), standings with playoff
+  odds, value and each team's contention window, and a chart of every team's lineup strength now
+  vs. the next two seasons
+- **Team:** any roster with values, ages, injury and taxi tags, and model-vs-market leans
+- **Values:** every player ranked by dynasty value; search, filter by position and owner
 - **Picks:** every 2027–2029 pick with its projected slot, top-3 odds and value
-- **Plan:** your rebuild planner: tank odds, your picks, who to sell before their age cliff
-  (and which contenders need them), young buy targets on other teams' benches, your core
-- **Trade:** pick a partner, tick players and picks on both sides, and see both sides' value
-  and how each team's best lineup changes now, next year and in two years; plus suggested
-  trades and the partner's profile
-- **Owners:** every league-mate's trading, waiver and drafting habits, and every past trade
-  judged by today's values
-- **Activity / History:** recent transactions; seasons and champions (linked from League)
+- **Plan:** your rebuild planner: tank odds with a chart of where your next first lands, who to
+  sell before their age cliff (and which contenders they'd start for), young buy targets on
+  other teams' benches, and your young core
+- **Trade:** pick a partner, tick players and picks on both sides, and see both sides' value and
+  how each team's best lineup changes now, next year and in two years; suggested fair trades;
+  the partner's profile. A bar at the bottom keeps the running totals in view.
+- **Player sheet:** tap any player anywhere for his value breakdown (model, FantasyCalc,
+  DynastyProcess), projected points per game for three seasons, this season's scoring, a value
+  trend, and a one-tap "build a trade" or "shop him" into the trade lab
+- **Owners, Moves, History:** league-mate profiles and every past trade at today's values;
+  recent transactions; seasons and champions (linked from League; tabs on PC)
+
+Works offline with the last data it loaded, follows your phone's light or dark mode, and the
+reload button at the top fetches the newest refresh. Each screen has a "How this works" note.
 
 ## How player values work (phase 2)
 
@@ -188,3 +198,11 @@ Run tests with `python -m unittest discover -s tests`.
 - nflverse datasets that aren't published yet (common early in a season) are skipped with a
   warning and retried next run.
 - Rookie-draft lottery settings aren't exposed until the 2027 draft is created.
+
+
+## Design
+
+Game-day TV graphics: field green and chalk, with the yellow first-down line used for one thing
+only, marking you (your record, your row, your picks, your dot on the chart). Headings and
+numbers use Big Shoulders Display (self-hosted in `site/fonts`, SIL Open Font License); body
+text uses the phone's own font. No build step: `site/` is plain HTML, CSS and JavaScript.
