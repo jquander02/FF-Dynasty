@@ -362,7 +362,25 @@ def build(store: Store, cfg: ModelConfig | None = None) -> dict:
         pw = cfg.prior_games * (1.0 if young else 0.4)
         talent = (num + pw * prior_ppg) / (den + pw) if (den + pw) else 0.0
 
+        def growth(n_from: int, n_to: int) -> float:
+            """Typical PPG change for this draft range between NFL years (years 1-3 only)."""
+            a = prior.get((pos, bucket, min(max(n_from, 1), 3)))
+            b = prior.get((pos, bucket, min(max(n_to, 1), 3)))
+            if not a or not b or a < 0.5:
+                return 1.0
+            return min(max(b / a, 0.8), 2.5)
+
         def at(season_offset: int) -> float:
+            # Early career: follow the draft class's year-1 -> year-3 trajectory instead of
+            # the age curve (it already contains the development jump); after year 3, age curve.
+            if nfl_year <= 3:
+                dev_years = min(3, nfl_year + season_offset) - nfl_year
+                base = talent * growth(nfl_year, nfl_year + dev_years)
+                rest = season_offset - dev_years
+                if rest <= 0 or age_now is None:
+                    return base
+                start = age_now + dev_years
+                return base * age_factor(curves, pos, start, start + rest)
             if age_now is None:
                 return talent
             return talent * age_factor(curves, pos, age_now, age_now + season_offset)

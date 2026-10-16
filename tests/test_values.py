@@ -117,6 +117,22 @@ class RichNfl(FakeNfl):
                     rec = round(ppg / 4)
                     out.append(row(player_id=g, position=pos, season=s, week=w, receptions=rec,
                                    targets=rec + 2, receiving_yards=round((ppg - rec) * 10)))
+        if s < 2026:
+            out += self._drafted_rows(s)
+        return out
+
+    # Drafted WRs (pick 10) who score 6, 10, 12 PPG in NFL years 1-3: the draft prior's trajectory.
+    DRAFTED = [(f"D-{y}-{i}", y) for y in (2023, 2024) for i in range(4)]
+
+    def _drafted_rows(self, s):
+        out = []
+        for g, y in self.DRAFTED:
+            n = s - y + 1
+            if 1 <= n <= 3:
+                ppg = {1: 6, 2: 10, 3: 12}[n]
+                for w in range(1, 18):
+                    out.append(row(player_id=g, position="WR", season=s, week=w, receptions=2,
+                                   receiving_yards=(ppg - 2) * 10))
         return out
 
     def load_rosters(self, seasons):
@@ -127,8 +143,8 @@ class RichNfl(FakeNfl):
     def load_draft_picks(self, seasons):
         self._log("draft_picks", seasons)
         s = seasons[0]
-        return [{"season": s, "round": 1, "pick": 10, "gsis_id": f"D-{s}-{i}", "position": "WR"}
-                for i in range(4)]
+        return [{"season": y, "round": 1, "pick": 10, "gsis_id": g, "position": "WR"}
+                for g, y in self.DRAFTED if y == s]
 
 
 class FakeResp:
@@ -203,8 +219,14 @@ class ValuePipelineTest(unittest.TestCase):
         # 30-year-old RB projects to decline; 27-year-old WR roughly holds
         self.assertLess(p["4034"]["ppg_y3"], p["4034"]["ppg_y1"])
         self.assertGreater(p["6794"]["model_value"], 0)
-        # rookie with no stats gets the draft prior through FantasyCalc's draft info
-        self.assertEqual(p["9999"]["draft_bucket"], "1-12")
+        # rookie with no stats gets the draft prior through FantasyCalc's draft info,
+        # and follows the draft class's year 1 -> 3 growth (6 -> 10 -> 12 PPG)
+        r = p["9999"]
+        self.assertEqual(r["draft_bucket"], "1-12")
+        self.assertAlmostEqual(r["talent_ppg"], 6.0, places=1)
+        self.assertAlmostEqual(r["ppg_y1"], 10.0, places=1)
+        self.assertAlmostEqual(r["ppg_y2"], 12.0, places=1)
+        self.assertLess(r["ppg_y3"], r["ppg_y2"] * 1.2)  # then the age curve takes over
         self.assertEqual(self.model["starters_counted"]["QB"], 12)
         self.assertTrue(self.q("SELECT COUNT(*) c FROM age_curve")[0]["c"] > 40)
 
