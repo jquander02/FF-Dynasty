@@ -53,8 +53,13 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: data
-          key: db-${{ github.run_id }}
-          restore-keys: db-
+          key: dbz-${{ github.run_id }}
+          restore-keys: dbz-
+
+      - name: Unpack database
+        run: |
+          if [ -f data/dynasty.db.gz ]; then gunzip -f data/dynasty.db.gz; fi
+          ls -la data 2>/dev/null || echo "No cached database: this run starts fresh"
 
       - name: Refresh data
         run: |
@@ -88,6 +93,30 @@ jobs:
             msg=$(tail -n 60 refresh.log | enc)
             echo "::error title=Refresh error::$msg"
           fi
+
+      # Compressed (SQLite shrinks ~4x) so the cache stays small and reliable.
+      - name: Pack database
+        if: success()
+        run: |
+          rm -f data/dynasty.db-wal data/dynasty.db-shm
+          gzip -f data/dynasty.db
+          ls -la data
+
+      - name: Save database
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: data
+          key: dbz-${{ github.run_id }}
+
+      - name: Back up database
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dynasty-db
+          path: data/dynasty.db.gz
+          retention-days: 7
+          if-no-files-found: ignore
 
       # Publishes site/ (app + freshly exported data) to GitHub Pages.
       - name: Configure Pages

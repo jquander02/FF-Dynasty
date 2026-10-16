@@ -48,7 +48,7 @@ def _datasets() -> list[Dataset]:
         # Whole-table datasets (refreshed every run)
         Dataset("nfl_ff_playerids", lambda nfl, s: nfl.load_ff_playerids(), per_season=False),
         Dataset("nfl_contracts", lambda nfl, s: nfl.load_contracts(), per_season=False),
-        Dataset("nfl_ff_rankings", lambda nfl, s: nfl.load_ff_rankings(type="all"), per_season=False),
+        Dataset("nfl_ff_rankings", lambda nfl, s: nfl.load_ff_rankings(type="draft"), per_season=False),
     ]
 
 
@@ -77,6 +77,9 @@ def run(
     counts: dict[str, int] = {}
     for ds in _datasets():
         if ds.extra and ds.extra not in extras:
+            # switched off: drop any old copy so the database stays small
+            store.conn.execute(f"DROP TABLE IF EXISTS {ds.table}")
+            store.delete("ingest_log", "key LIKE ?", (f"nfl:{ds.table}:%",))
             continue
         if not ds.per_season:
             try:

@@ -24,7 +24,7 @@ class Config:
     owner_leagues: bool = True
     # Optional nflverse loaders that are large or slow; turn off if a run gets too long.
     nflverse_extras: list[str] = field(
-        default_factory=lambda: ["nextgen", "pfr_advstats", "depth_charts", "injuries"]
+        default_factory=lambda: ["nextgen", "pfr_advstats", "injuries"]
     )
     # Blend weights for dynasty value: projection model vs market sources.
     value_weights: dict = field(

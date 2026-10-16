@@ -54,6 +54,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "refresh":
+            if args.quick and not _has_values(store):
+                print("No player values in the database yet (new or lost cache): running a full refresh.")
+                args.quick = False
             client = SleeperClient(cache_dir=cfg.cache_dir)
             res = ingest_sleeper.run(
                 store, client, cfg.league_id, cfg.username,
@@ -89,12 +92,21 @@ def main(argv: list[str] | None = None) -> int:
                 pk = picks.build(store, cfg.value_weights)
                 print("Picks: " + ", ".join(f"{k} {v}" for k, v in pk.items()))
 
+        if args.command == "refresh" and not args.quick:
+            store.commit()
+            store.conn.execute("VACUUM")
         out = export.run(store, cfg.site_dir)
         print("Export: " + ", ".join(f"{k} {v}" for k, v in out.items()))
         print(f"Done in {time.time() - started:.0f}s")
         return 0
     finally:
         store.close()
+
+
+def _has_values(store: Store) -> bool:
+    if not store.query("SELECT 1 FROM sqlite_master WHERE name='player_value'"):
+        return False
+    return store.query("SELECT COUNT(*) c FROM player_value")[0]["c"] > 0
 
 
 if __name__ == "__main__":
