@@ -130,7 +130,7 @@ def project_as_of(b: dict, through: int, cfg: ModelConfig) -> dict:
     birth = {g: date.fromisoformat(v) for g, v in b["birth"].items()}
     picks = [p for p in b["picks"] if p["year"] <= through]
     curves = model.fit_age_curves(seasons, birth, through, cfg, current_complete=True)
-    prior = model.fit_draft_prior(picks, seasons, through, current_complete=True)
+    prior = model.fit_draft_prior(picks, seasons, through, current_complete=True, per_game=cfg.prior_per_game)
     return model.project(players_as_of(b, through), seasons, curves, prior, through, cfg)
 
 

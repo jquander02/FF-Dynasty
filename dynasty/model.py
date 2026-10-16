@@ -44,10 +44,15 @@ PICK_BUCKETS = [(12, "1-12"), (32, "13-32"), (64, "33-64"), (100, "65-100"), (16
 @dataclass
 class ModelConfig:
     min_games_curve: int = 6
-    curve_shrink_games: float = 60.0      # games of evidence needed to move halfway off the prior
-    recency: tuple = (1.0, 0.75, 0.5)     # weights for current, last, 2 seasons ago
+    curve_min_games_next: int = 6         # games needed in the following season for an aging pair
+    curve_basis: str = "ppg"              # "ppg" or "blend" (actual/expected mix, less noisy)
+    curve_weight: str = "min"             # pair weight: "min" games or "harmonic" mean
+    curve_shrink_games: float = 200.0     # games of evidence needed to move halfway off the prior (backtested)
+    recency: tuple = (1.0, 0.6, 0.3)      # weights for current, last, 2 seasons ago (backtested)
     actual_vs_expected: float = 0.75      # PPG blend: actual vs expected fantasy points
-    prior_games: float = 6.0              # pseudo-games given to the draft prior
+    prior_games: float = 4.0              # pseudo-games given to the draft prior, NFL years 1-3 (backtested)
+    prior_per_game: bool = True           # draft prior in points per game played (False: per 17 games)
+    vet_prior_share: float = 0.0          # share of prior_games given to the draft prior after NFL year 3
     availability: float = 0.85            # share of games a player is expected to play
     season_games: int = 17
     discounts: tuple = (1.0, 0.9, 0.75, 0.6)  # rest-of-season, +1, +2, +3 seasons
@@ -122,14 +127,20 @@ def fit_age_curves(seasons: list[dict], birth: dict, current: int, cfg: ModelCon
             s1 = ss.get(yr + 1)
             if not s1 or yr + 1 >= last:  # current season is incomplete
                 continue
-            if s0["games"] < cfg.min_games_curve or s1["games"] < cfg.min_games_curve:
+            if s0["games"] < cfg.min_games_curve or s1["games"] < cfg.curve_min_games_next:
                 continue
             pos = s0["position"]
             a = age_on(bd, yr)
             if pos not in POSITIONS or a is None:
                 continue
-            lr = math.log(max(s1["ppg"], 2.0) / max(s0["ppg"], 2.0))
-            w = min(s0["games"], s1["games"])
+
+            def level(srow):
+                if cfg.curve_basis == "blend" and srow.get("xppg") is not None:
+                    return cfg.actual_vs_expected * srow["ppg"] + (1 - cfg.actual_vs_expected) * srow["xppg"]
+                return srow["ppg"]
+            lr = math.log(max(level(s1), 2.0) / max(level(s0), 2.0))
+            w = 2 * s0["games"] * s1["games"] / (s0["games"] + s1["games"]) if cfg.curve_weight == "harmonic" \
+                else min(s0["games"], s1["games"])
             k = (pos, int(a))
             sums[k][0] += w * lr
             sums[k][1] += w
@@ -170,11 +181,18 @@ def age_factor(curves: dict, pos: str, from_age: float, to_age: float) -> float:
 # ---------------------------------------------------------------------------
 # Draft prior
 # ---------------------------------------------------------------------------
-def fit_draft_prior(picks: list[dict], seasons: list[dict], current: int, current_complete: bool = False) -> dict:
-    """{(pos, bucket, nfl_year): expected points per game (missed games count as 0)}."""
+def fit_draft_prior(picks: list[dict], seasons: list[dict], current: int, current_complete: bool = False,
+                    per_game: bool = True, share: dict | None = None) -> dict:
+    """{(pos, bucket, nfl_year): points per game for players drafted in that range}.
+
+    per_game=True: points per game played (games-weighted), the same footing as a player's own
+    PPG; how often draftees actually play goes into `share` ({key: games / 17}) instead.
+    per_game=False (old behaviour): season points / 17, so missed games count as zeros.
+    Only seasons inside the stats window count; earlier seasons aren't zeros, they're unknown."""
     last = current + 1 if current_complete else current
-    pts = {(s["gsis_id"], s["season"]): s["pts"] for s in seasons}
-    acc = defaultdict(list)
+    first = min((s["season"] for s in seasons), default=current)
+    rows = {(s["gsis_id"], s["season"]): s for s in seasons}
+    acc = defaultdict(lambda: [0.0, 0.0, 0])   # pts, games, players
     for p in picks:
         pos, yr = p["position"], p["year"]
         if pos not in POSITIONS or yr is None:
@@ -182,18 +200,31 @@ def fit_draft_prior(picks: list[dict], seasons: list[dict], current: int, curren
         b = pick_bucket(p["pick"])
         for n in (1, 2, 3):
             s = yr + n - 1
-            if s >= last:
+            if s >= last or s < first:
                 continue
-            acc[(pos, b, n)].append(pts.get((p["gsis_id"], s), 0.0) / 17.0)
+            r = rows.get((p["gsis_id"], s))
+            a = acc[(pos, b, n)]
+            a[0] += r["pts"] if r else 0.0
+            a[1] += r["games"] if r else 0
+            a[2] += 1
     # Pooled trajectory over picks 1-100 per position: a stable year 1 -> 3 growth curve
     # (single buckets like first-round TEs have too few players to trust their shape).
-    for (pos, b, n), v in list(acc.items()):
+    for (pos, b, n), a in list(acc.items()):
         if b in ("1-12", "13-32", "33-64", "65-100"):
-            acc.setdefault((pos, "POOLED", n), []).extend(v)
+            pa = acc[(pos, "POOLED", n)]
+            for i in range(3):
+                pa[i] += a[i]
     prior = {}
-    for k, v in acc.items():
-        if len(v) >= 3:
-            prior[k] = round(sum(v) / len(v), 3)
+    for k, (pts, games, n) in acc.items():
+        if n < 3:
+            continue
+        if per_game:
+            if games >= 17:
+                prior[k] = round(pts / games, 3)
+        else:
+            prior[k] = round(pts / 17.0 / n, 3)
+        if share is not None:
+            share[k] = round(games / 17.0 / n, 3)
     # fill gaps: a missing year uses the nearest year available for that bucket
     for pos in POSITIONS:
         for _, b in PICK_BUCKETS + [(0, "UDFA")]:
@@ -309,7 +340,7 @@ def project(players: list[dict], seasons: list[dict], curves: dict, prior: dict,
             den += w * srow["games"]
             games_hist += srow["games"]
         young = nfl_year <= 3
-        pw = cfg.prior_games * (1.0 if young else 0.4)
+        pw = cfg.prior_games * (1.0 if young else cfg.vet_prior_share)
         talent = (num + pw * prior_ppg) / (den + pw) if (den + pw) else 0.0
 
         def growth(n_from: int, n_to: int) -> float:
@@ -413,7 +444,8 @@ def build(store: Store, cfg: ModelConfig | None = None) -> dict:
                                                     "pick": (rnd - 1) * 32 + int(info["pick"])}
 
     curves = fit_age_curves(seasons, birth, current, cfg)
-    prior = fit_draft_prior(picks, seasons, current)
+    share: dict = {}
+    prior = fit_draft_prior(picks, seasons, current, per_game=cfg.prior_per_game, share=share)
 
     store.write_frame("age_curve", [
         {"position": pos, "age": age, "multiplier": round(m, 4), "prior": prior_multiplier(pos, age)}
@@ -447,14 +479,27 @@ def build(store: Store, cfg: ModelConfig | None = None) -> dict:
     )
     games_full = cfg.season_games * cfg.availability
     games_ros = remaining * cfg.availability
+    def avail(v: dict, offset: int) -> float:
+        """Share of games a player is expected to play. Young players with little NFL history
+        play as often as their draft range typically does (busts and depth players play less)."""
+        if not cfg.prior_per_game or v["nfl_year"] > 3 or v["games_history"] >= 10:
+            return cfg.availability
+        n = min(max(v["nfl_year"] + offset, 1), 3)
+        sh = share.get((v["position"], v["draft_bucket"], n))
+        return min(cfg.availability, sh) if sh is not None else cfg.availability
+
     for v in proj.values():
         r = repl.get(v["position"], 0.0)
         cv0 = uncertainty(v["games_history"])
         parts = [
-            cfg.discounts[0] * games_ros * expected_excess(v["ppg_ros"], cv0 * v["ppg_ros"], r),
-            cfg.discounts[1] * games_full * expected_excess(v["ppg_y1"], (cv0 + 0.06) * v["ppg_y1"], r),
-            cfg.discounts[2] * games_full * expected_excess(v["ppg_y2"], (cv0 + 0.12) * v["ppg_y2"], r),
-            cfg.discounts[3] * games_full * expected_excess(v["ppg_y3"], (cv0 + 0.18) * v["ppg_y3"], r),
+            cfg.discounts[0] * games_ros / cfg.availability * avail(v, 0)
+            * expected_excess(v["ppg_ros"], cv0 * v["ppg_ros"], r),
+            cfg.discounts[1] * games_full / cfg.availability * avail(v, 1)
+            * expected_excess(v["ppg_y1"], (cv0 + 0.06) * v["ppg_y1"], r),
+            cfg.discounts[2] * games_full / cfg.availability * avail(v, 2)
+            * expected_excess(v["ppg_y2"], (cv0 + 0.12) * v["ppg_y2"], r),
+            cfg.discounts[3] * games_full / cfg.availability * avail(v, 3)
+            * expected_excess(v["ppg_y3"], (cv0 + 0.18) * v["ppg_y3"], r),
         ]
         v["repl_ppg"] = round(r, 2)
         v["model_value"] = round(sum(parts), 1)

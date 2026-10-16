@@ -55,6 +55,18 @@ class BacktestTest(unittest.TestCase):
         for k in a:
             self.assertEqual(a[k]["ppg_y1"], c[k]["ppg_y1"])
 
+    def test_draft_prior_ignores_seasons_before_the_data(self):
+        from dynasty import model
+        seasons = [{"gsis_id": f"r{i}", "season": 2014, "position": "RB", "games": 16, "pts": 160.0, "ppg": 10.0}
+                   for i in range(5)]
+        picks = [{"gsis_id": f"r{i}", "year": 2012, "pick": 5, "position": "RB"} for i in range(5)]
+        share = {}
+        prior = model.fit_draft_prior(picks, seasons, 2014, current_complete=True, share=share)
+        # 2012 seasons aren't in the data: unknown, not zeros (the gap borrows the known year)
+        self.assertEqual(prior[("RB", "1-12", 1)], 10.0)
+        self.assertEqual(prior[("RB", "1-12", 3)], 10.0)  # per game played
+        self.assertAlmostEqual(share[("RB", "1-12", 3)], 16 / 17, places=3)
+
     def test_spearman(self):
         self.assertAlmostEqual(backtest.spearman(list(range(10)), list(range(10))), 1.0)
         self.assertAlmostEqual(backtest.spearman(list(range(10)), list(range(10))[::-1]), -1.0)
