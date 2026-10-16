@@ -44,7 +44,7 @@ class LearnedTest(unittest.TestCase):
         d = learned.Data(b)
         rows = learned.build_rows(d, 2020, 0)
         self.assertTrue(rows)
-        f = rows[0]["f"]
+        f = next(r["f"] for r in rows if r["f"].get("l1_games"))   # a player with a season behind him
         for key in ("age", "log_pick", "l1_ppg", "new_team", "rookie_comp"):
             self.assertIn(key, f)
         learned.attach_targets(d, rows)

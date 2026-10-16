@@ -69,8 +69,9 @@ class Data:
         self.weeks = defaultdict(list)            # (g, season) -> [(week, team, row dict)]
         self.team_weeks = defaultdict(set)        # (team, season) -> weeks played
         cols = [c for c in w if c not in ("gsis_id", "season", "week", "team")]
+        teams = w.get("team") or [None] * n
         for i in range(n):
-            g, s, wk, t = w["gsis_id"][i], w["season"][i], w["week"][i], w["team"][i]
+            g, s, wk, t = w["gsis_id"][i], w["season"][i], w["week"][i], teams[i]
             if g is None or s is None or wk is None:
                 continue
             row = {c: w[c][i] for c in cols}
@@ -89,16 +90,22 @@ class Data:
             if p.get("gsis_id"):
                 self.draft[p["gsis_id"]] = p
                 self.pos.setdefault(p["gsis_id"], p.get("position"))
+        def col(tbl, name, n):
+            return tbl.get(name) or [None] * n
         pt = b.get("pick_teams") or {}
+        n_pt = len(pt.get("gsis_id", []))
+        p_season, p_team, p_pick, p_pos = (col(pt, c, n_pt) for c in ("season", "team", "pick", "position"))
         self.draft_team = {}
-        for i in range(len(pt.get("gsis_id", []))):
+        for i in range(n_pt):
             g = pt["gsis_id"][i]
             if g:
-                self.draft_team[g] = (pt["season"][i], pt["team"][i], pt["pick"][i], pt["position"][i])
+                self.draft_team[g] = (p_season[i], p_team[i], p_pick[i], p_pos[i])
         ro = b.get("rosters") or {}
+        n_ro = len(ro.get("gsis_id", []))
+        r_season, r_team = col(ro, "season", n_ro), col(ro, "team", n_ro)
         self.roster_team = {}
-        for i in range(len(ro.get("gsis_id", []))):
-            g, s, t = ro["gsis_id"][i], ro["season"][i], ro["team"][i]
+        for i in range(n_ro):
+            g, s, t = ro["gsis_id"][i], r_season[i], r_team[i]
             if g and s and t:
                 self.roster_team[(g, int(s))] = t
         self.combine = {c["gsis_id"]: c for c in b.get("combine", [])}
