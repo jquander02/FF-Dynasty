@@ -193,7 +193,7 @@
       { key: "wl", label: "W–L", num: 1, value: (t) => t.wins + 0.5 * (t.ties || 0) + t.pf / 1e5, html: record },
       { key: "pf", label: "PF", num: 1, wide: 1, value: (t) => t.pf, html: (t) => fmt(t.pf, 1) },
       { key: "po", label: "Playoffs", num: 1, value: (t) => t.p_playoffs, html: (t) => pct(t.p_playoffs) },
-      { key: "value", label: "Value", num: 1, value: (t) => t.value, html: (t) => (t.value ? `${fmt(t.value / 1000, 1)}k` : "–") },
+      { key: "value", label: "Value", num: 1, value: (t) => t.value, html: (t) => (t.value ? `${fmt(t.value / 1000)}k` : "–") },
       { key: "age", label: "Age", num: 1, wide: 1, value: (t) => t.avg_age, html: (t) => t.avg_age ?? "–" },
       { key: "faab", label: "FAAB", num: 1, wide: 1, value: (t) => t.faab_left, html: (t) => `$${fmt(t.faab_left)}` },
     ];
@@ -201,8 +201,8 @@
       ${board([
         { v: week ? `Wk ${week}` : "–", l: week ? `${plural(Math.max(0, lastReg - week + 1), "regular-season week")} left` : "Season not started" },
         { v: `Wk ${s.trade_deadline ?? "–"}`, l: "Trade deadline" },
-        { v: record(leader), l: `Best record: ${esc(leader?.team || "–")}` },
-        { v: compact(richest?.value), l: `Most roster value: ${esc(richest?.team || "–")}` },
+        { v: record(leader), l: `Best record, ${esc(leader?.team || "–")}` },
+        { v: richest?.value ? `${fmt(richest.value / 1000)}k` : "–", l: `Top value, ${esc(richest?.team || "–")}` },
       ])}
       <h2>Standings</h2>
       ${sortableTable("standings", cols, list, { key: "rank", dir: 1 }, (t) => (t.roster_id === state.team ? "me" : ""))}
@@ -577,7 +577,7 @@
           </div>
           <button class="btn" data-load="${esc(f.id)}">Try it</button>
         </div>`).join("") || `<div class="empty">No fair deals found${A ? " for this team" : ""}.</div>`}</div>
-      ${selected ? `<button class="tray" type="button" data-totop="1"><span>A gives <b>${fmt(pkgValue([...state.give].map(assetValue)))}</b>, B gives <b>${fmt(pkgValue([...state.get].map(assetValue)))}</b></span><span>${A && B ? "See result" : "Choose teams"}</span></button>` : ""}
+      ${selected ? `<button class="tray" type="button" data-totop="1"><span>${esc(A?.team || "Team A")} <b>${fmt(pkgValue([...state.give].map(assetValue)))}</b>, ${esc(B?.team || "Team B")} <b>${fmt(pkgValue([...state.get].map(assetValue)))}</b></span><span>${A && B ? "See result" : "Choose teams"}</span></button>` : ""}
       ${how("How trades are judged", [
         `A package is worth less than the sum of its parts: two equal players count as about 1.7 of one, because only so many players start. A trade is fair within 10%.`,
         `Lineup change compares each team's best possible starting lineup before and after, in points per week: now (injured players left out), next season, and in two seasons.`,

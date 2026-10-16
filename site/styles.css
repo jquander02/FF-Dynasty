@@ -179,7 +179,7 @@ button.row:hover .pname { text-decoration: underline; }
 .w-power { color: var(--good); } .w-now { color: var(--pos-wr); } .w-rise { color: var(--pos-te); } .w-reb { color: var(--bad); }
 
 /* ---------- standings ---------- */
-.table { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-group); overflow: hidden; }
+.table { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-group); overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
 th, td { padding: 10px 6px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
 th { font-size: 12px; font-weight: 600; color: var(--muted); background: var(--surface-2); }
@@ -187,7 +187,7 @@ tr:last-child td { border-bottom: 0; }
 td.num, th.num { text-align: right; }
 td:first-child, th:first-child { padding-left: 12px; width: 28px; color: var(--muted); }
 td:last-child, th:last-child { padding-right: 12px; }
-.tname { font-weight: 650; color: var(--ink); display: block; max-width: 38vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tname { font-weight: 650; color: var(--ink); display: block; max-width: 31vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 td .win { display: flex; margin-top: 2px; }
 tr.me td { background: var(--marker-soft); }
 tr.me td:first-child { box-shadow: inset 4px 0 0 var(--marker); color: var(--ink); font-weight: 700; }
@@ -204,8 +204,9 @@ th.num .th-sort { flex-direction: row; }
 th .th-sort.on { color: var(--ink); }
 th .th-sort:focus-visible { outline: 2px solid var(--turf); outline-offset: 2px; border-radius: 3px; }
 .arrow { font-size: 9px; min-width: 8px; }
-.sortby { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; font-size: 13px; color: var(--muted); }
+.sortby { display: flex; align-items: center; gap: 8px; flex: 1 1 100%; min-width: 0; font-size: 13px; color: var(--muted); }
 .sortby select { flex: 1; }
+@media (min-width: 700px) { .sortby { flex: 1 1 0; } }
 .controls.pair label { display: flex; flex-direction: column; gap: 4px; flex: 1 1 160px; min-width: 0; font-size: 12px; font-weight: 600; color: var(--muted); }
 .controls.pair label select { flex: none; width: 100%; }
 .controls.pair .btn { align-self: flex-end; }
