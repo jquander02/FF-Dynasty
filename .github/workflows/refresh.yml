@@ -64,28 +64,30 @@ jobs:
           # A push only redeploys the app; quick-refresh so the data stays current.
           if [ "${{ github.event_name }}" = "push" ]; then MODE=quick; fi
           echo "Mode: $MODE"
+          set -o pipefail
           if [ "$MODE" = "quick" ]; then
-            python -m dynasty refresh --quick -v
+            python -m dynasty refresh --quick -v 2>&1 | tee refresh.log
           else
-            python -m dynasty refresh -v
+            python -m dynasty refresh -v 2>&1 | tee refresh.log
           fi
-          python -m dynasty status
+          python -m dynasty status | tee -a refresh.log
 
-      - name: Save database
+      # Summaries as annotations, readable on the run page and through the API.
+      - name: Report
         if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: data
-          key: db-${{ github.run_id }}
-
-      - name: Back up database
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dynasty-db
-          path: data/dynasty.db
-          retention-days: 7
-          if-no-files-found: ignore
+        run: |
+          [ -f refresh.log ] || exit 0
+          enc() { python3 -c 'import sys; s=sys.stdin.read()[-60000:]; print(s.replace("%","%25").replace("\r","").replace("\n","%0A"))'; }
+          msg=$(grep -v -E " (INFO|DEBUG|WARNING) " refresh.log | enc)
+          echo "::notice title=Refresh summary::$msg"
+          if grep -q " WARNING " refresh.log; then
+            msg=$(grep " WARNING " refresh.log | enc)
+            echo "::warning title=Refresh warnings::$msg"
+          fi
+          if grep -q -E "Traceback|Error:" refresh.log; then
+            msg=$(tail -n 60 refresh.log | enc)
+            echo "::error title=Refresh error::$msg"
+          fi
 
       # Publishes site/ (app + freshly exported data) to GitHub Pages.
       - name: Configure Pages
