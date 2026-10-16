@@ -81,7 +81,8 @@ def make_bundle(store) -> dict:
         if r["full_name"]:
             names.setdefault(r["gsis_id"], r["full_name"])
     # weekly rows, columnar (for noise floors, usage and availability features)
-    wk_cols = ("gsis_id", "season", "week", "team", "pts", "targets", "rush_att", "rec_yd", "target_share",
+    wk_cols = ("gsis_id", "season", "week", "team", "pts", "targets", "rec", "rec_yd", "rec_td", "rush_att",
+               "rush_yd", "rush_td", "pass_att", "pass_yd", "pass_td", "pass_int", "target_share",
                "air_yards_share", "wopr", "snap_pct", "xfp")
     weeks = {c: [] for c in wk_cols}
     if model._exists(store, "player_week"):
@@ -107,7 +108,30 @@ def make_bundle(store) -> dict:
     lg = store.query("SELECT season FROM league_season WHERE is_current=1")
     return {"made": date.today().isoformat(), "current_season": int(lg[0]["season"]) if lg else None,
             "seasons": seasons, "picks": picks, "birth": birth, "names": names, "weeks": weeks,
-            "combine": combine}
+            "combine": combine, "rosters": _table_dump(store, "nfl_rosters", (
+                "gsis_id", "season", "team", "position", "status", "depth_chart_position", "years_exp",
+                "rookie_year", "draft_number", "entry_year", "week")),
+            "pick_teams": _table_dump(store, "nfl_draft_picks", ("gsis_id", "season", "pick", "round", "team", "position")),
+            "contracts": _table_dump(store, "nfl_contracts", None, positions=("QB", "RB", "WR", "TE"))}
+
+
+def _table_dump(store, table: str, cols, positions=None) -> dict:
+    """Columnar dump of a table (chosen columns, or every scalar column), skill positions only."""
+    if not model._exists(store, table):
+        return {}
+    have = [c for c in model._cols(store, table)]
+    use = [c for c in (cols or have) if c in have]
+    pos_col = "position" if "position" in have else None
+    out = {c: [] for c in use}
+    for r in store.query(f"SELECT {', '.join(chr(34) + c + chr(34) for c in use)} FROM {table}"):
+        if positions and pos_col and r[pos_col] not in positions:
+            continue
+        vals = [r[c] for c in use]
+        if any(isinstance(v, (bytes, bytearray)) for v in vals):
+            continue
+        for c, v in zip(use, vals):
+            out[c].append(v if not isinstance(v, str) or len(v) < 80 else None)
+    return out
 
 
 def save_bundle(bundle: dict, path: str) -> None:
