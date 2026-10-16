@@ -1,0 +1,101 @@
+name: Refresh and deploy
+
+on:
+  schedule:
+    # Full refresh once a day, 4:17am Central (09:17 UTC): stats, players, owners' other leagues.
+    - cron: "17 9 * * *"
+    # Quick league-only refresh every 2 hours on game days (Sun, Mon, Thu in UTC).
+    - cron: "7 */2 * * 0,1,4"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "full or quick"
+        default: full
+        type: choice
+        options: [full, quick]
+  push:
+    branches: [main]
+    paths: ["site/**", "dynasty/**", "config.yaml"]
+
+concurrency:
+  group: refresh
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: python -m unittest discover -s tests
+
+      # The database lives in the Actions cache between runs. If it is ever lost,
+      # the next full run rebuilds it from scratch (all data is re-downloadable).
+      - name: Restore database
+        uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: db-${{ github.run_id }}
+          restore-keys: db-
+
+      - name: Refresh data
+        run: |
+          MODE=full
+          if [ "${{ github.event.schedule }}" = "7 */2 * * 0,1,4" ]; then MODE=quick; fi
+          if [ "${{ github.event.inputs.mode }}" = "quick" ]; then MODE=quick; fi
+          # A push only redeploys the app; quick-refresh so the data stays current.
+          if [ "${{ github.event_name }}" = "push" ]; then MODE=quick; fi
+          echo "Mode: $MODE"
+          if [ "$MODE" = "quick" ]; then
+            python -m dynasty refresh --quick -v
+          else
+            python -m dynasty refresh -v
+          fi
+          python -m dynasty status
+
+      - name: Save database
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data
+          key: db-${{ github.run_id }}
+
+      - name: Back up database
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dynasty-db
+          path: data/dynasty.db
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # Publishes site/ (app + freshly exported data) to GitHub Pages.
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload app
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,12 @@
+# Your Sleeper league and username. Not secret: Sleeper league data is public.
+league_id: "1312163152787443712"
+username: jquander
+
+# Past NFL seasons of nflverse stats to keep (the current season is always included).
+nfl_seasons_back: 5
+
+# Pull every league-mate's other Sleeper leagues and drafts (for owner tendencies).
+owner_leagues: true
+
+# Optional nflverse datasets. Remove any that make runs too slow.
+nflverse_extras: [nextgen, pfr_advstats, depth_charts, injuries]

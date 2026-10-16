@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Dynasty Analyzer</title>
+  <meta name="description" content="Year-round analysis for a Sleeper dynasty league">
+  <meta name="theme-color" content="#0f1a14" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f4f6f3" media="(prefers-color-scheme: light)">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png" type="image/png">
+  <!-- iPhone home-screen app -->
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Dynasty">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <h1 id="league-name">Dynasty Analyzer</h1>
+      <p id="league-sub" class="muted">Loading…</p>
+    </div>
+    <nav class="tabs" id="tabs" aria-label="Sections">
+      <a href="#league" data-tab="league">League</a>
+      <a href="#team" data-tab="team">Team</a>
+      <a href="#picks" data-tab="picks">Picks</a>
+      <a href="#activity" data-tab="activity">Activity</a>
+      <a href="#history" data-tab="history">History</a>
+    </nav>
+  </header>
+
+  <main id="view" tabindex="-1"></main>
+
+  <nav class="tabbar" id="tabbar" aria-label="Sections">
+    <a href="#league" data-tab="league"><span class="ic">▤</span>League</a>
+    <a href="#team" data-tab="team"><span class="ic">◉</span>Team</a>
+    <a href="#picks" data-tab="picks"><span class="ic">◇</span>Picks</a>
+    <a href="#activity" data-tab="activity"><span class="ic">⇄</span>Activity</a>
+    <a href="#history" data-tab="history"><span class="ic">★</span>History</a>
+  </nav>
+
+  <script src="app.js"></script>
+</body>
+</html>

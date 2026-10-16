@@ -1,1 +1,121 @@
-# FF-Dynasty
+# Dynasty Analyzer — Phase 1
+
+A year-round analysis tool for the **Dynasty** league on Sleeper (league `1312163152787443712`).
+Phase 1 is the data foundation: it pulls everything Sleeper and nflverse publish into one
+database, refreshes it on a schedule in GitHub's cloud, and publishes an app you can install
+on your iPhone and Windows PC.
+
+**What's in the app now:** standings with roster age and FAAB left · every team's roster
+(starters, taxi, IR, ages) · who owns every 2027–2029 rookie pick · the league's recent
+transactions · season history and champions. Player values, the trade lab, owner profiles
+and the rebuild planner build on this data in phases 2–4.
+
+---
+
+## Where it lives
+
+- **Code and scheduled refresh:** GitHub repo [jquander02/FF-Dynasty](https://github.com/jquander02/FF-Dynasty) (public)
+- **App:** https://jquander02.github.io/FF-Dynasty/ (GitHub Pages, published by the refresh workflow)
+
+No passwords, API keys or secrets are involved: Sleeper and nflverse are public, and GitHub
+Pages deploys with the workflow's built-in permissions. Everything the app shows is already
+public on Sleeper.
+
+### Install the app
+- **iPhone:** open the address in **Safari** → Share button → **Add to Home Screen**.
+  It opens full screen with its own icon.
+- **Windows PC:** open the address in **Edge** or **Chrome** → the install icon at the right
+  of the address bar (or menu → **Apps → Install this site as an app**). Pin it to the taskbar.
+
+### If Pages isn't switched on
+The first deploy needs GitHub Pages set to use Actions: repo **Settings → Pages →
+Build and deployment → Source: GitHub Actions**. Then re-run the workflow from the
+**Actions** tab.
+
+---
+
+## How it refreshes
+
+| When | What runs |
+| --- | --- |
+| Every day, 4:17am Central | Full refresh: league, players file, owners' other leagues, nflverse stats, ID mapping |
+| Every 2 hours on Sun, Mon, Thu | Quick refresh: league data only (rosters, scores, transactions, picks) |
+| Any time | Actions tab → Refresh and deploy → Run workflow |
+
+The database is kept between runs in GitHub's Actions cache, and a copy is attached to each
+run as a downloadable artifact for 7 days. If the cache is ever cleared, the next full run
+rebuilds everything. Actions minutes are free and unlimited for public repos.
+
+## Running it on your PC (optional)
+
+Needs Python 3.11+ from [python.org](https://www.python.org/downloads/) (tick "Add to PATH").
+In PowerShell, inside this folder:
+
+```powershell
+py -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python -m dynasty refresh -v          # full refresh into data\dynasty.db
+python -m http.server -d site 8000    # then open http://localhost:8000
+```
+
+`python -m dynasty refresh --quick` skips the slow parts. `python -m dynasty status` shows
+row counts. The database is plain SQLite, so you can also open `data\dynasty.db` in
+[DB Browser for SQLite](https://sqlitebrowser.org) to explore it.
+
+---
+
+## What gets pulled
+
+**Sleeper** (current season plus every past season through `previous_league_id`):
+
+| Table | Contents |
+| --- | --- |
+| `league_season` | Settings, scoring, roster slots for each season |
+| `owner`, `league_member` | Managers, team names, commissioner |
+| `roster`, `roster_snapshot` | Record, PF/PA, max PF, FAAB used; daily snapshot of every roster slot |
+| `matchup`, `matchup_player` | Weekly scores and each player's points, starter or bench |
+| `txn`, `txn_move` | Every trade, waiver, FA move; one row per player, pick or FAAB moved |
+| `traded_pick`, `draft_pick_owned` | Pick trades; current owner of every 2027–2029 pick |
+| `draft`, `draft_pick_made` | Startup and rookie drafts, pick by pick |
+| `bracket` | Playoff and consolation results |
+| `player`, `trending` | Sleeper's full player file; daily add/drop trends |
+| `owner_league`, `ext_draft_pick` | Each manager's other leagues and the picks they made there |
+| `raw_snapshot`, `ingest_log` | Latest raw responses; what's been loaded |
+
+**nflverse** (via `nflreadpy`, last 5 seasons + current):
+weekly player stats, snap counts, expected fantasy points (`ff_opportunity`), rosters,
+NFL draft picks and combine (12 seasons), depth charts, injuries, Next Gen Stats,
+PFR advanced stats, contracts, consensus rankings, and the cross-site ID table.
+Each lands in an `nfl_*` table.
+
+**ID mapping:** `player_xref` links each Sleeper player to nflverse (gsis), PFR,
+ESPN, KeepTradeCut and FantasyPros ids — first by nflverse's own Sleeper id column,
+then Sleeper's gsis id, then name + birthdate.
+
+## Code layout
+
+```
+dynasty/
+  sleeper.py         Sleeper API client (caching, rate limiting, retries)
+  ingest_sleeper.py  League history, rosters, matchups, transactions, picks, drafts, owners
+  nflverse.py        nflverse datasets, one season at a time
+  idmap.py           Sleeper ↔ nflverse id mapping
+  store.py           SQLite schema and writers
+  export.py          JSON files the app reads (site/data/)
+  __main__.py        Command line: refresh | export | status
+site/                The installable web app (HTML/CSS/JS, offline-capable)
+tests/               Offline tests (fixtures include this league's real settings)
+.github/workflows/   Scheduled refresh + deploy
+```
+
+Run tests with `python -m unittest discover -s tests`.
+
+## Known limits
+
+- Built and tested offline: the build environment couldn't reach Sleeper or nflverse
+  directly, so tests use this league's real settings and draft responses plus synthetic data
+  in Sleeper's documented shapes. Watch the first Actions run's log for any warnings.
+- nflverse datasets that aren't published yet (common early in a season) are skipped with a
+  warning and retried next run.
+- Rookie-draft lottery settings aren't exposed until the 2027 draft is created.
