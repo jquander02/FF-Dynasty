@@ -9,18 +9,24 @@ publishes an app you can install on your iPhone and Windows PC.
 
 ## What's in the app
 
-- **League:** scoreboard (record, playoff odds, roster value rank, FAAB), standings with playoff
-  odds, value and each team's contention window, and a chart of every team's lineup strength now
-  vs. the next two seasons
-- **Team:** any roster with values, ages, injury and taxi tags, and model-vs-market leans
-- **Values:** every player ranked by dynasty value; search, filter by position and owner
-- **Picks:** every 2027–2029 pick with its projected slot, top-3 odds and value
-- **Plan:** your rebuild planner: tank odds with a chart of where your next first lands, who to
-  sell before their age cliff (and which contenders they'd start for), young buy targets on
-  other teams' benches, and your young core
-- **Trade:** pick a partner, tick players and picks on both sides, and see both sides' value and
-  how each team's best lineup changes now, next year and in two years; suggested fair trades;
-  the partner's profile. A bar at the bottom keeps the running totals in view.
+The app is neutral: nothing is tied to one manager. Every team name is shown with the
+manager's Sleeper username (e.g. *WR's 4 Sale @jquander*). Tap any table heading to sort by
+that column (tap again to reverse); player and pick lists have a "Sort by" menu.
+
+- **League:** week, trade deadline, best record and most roster value; standings with playoff
+  odds, value and each team's contention window, and a chart of every team's lineup strength
+  now vs. the next two seasons
+- **Team:** pick any team: roster with values, ages, injury and taxi tags, model-vs-market leans
+- **Values:** every player ranked by dynasty value; search, filter by position and team, sort
+  by value, age, projection, points per game or 7-day change
+- **Picks:** every 2027–2029 pick with its projected slot, top-3 odds and value; filter by team
+- **Plan:** a planner for any team: draft odds with a chart of where its next first lands, who
+  to sell before their age cliff (and which contenders they'd start for), young buy targets on
+  other teams' benches, and its young core
+- **Trade:** pick Team A and Team B, tick players and picks on both sides, and see both sides'
+  value and how each team's best lineup changes now, next year and in two years; suggested
+  fair trades for every team; both managers' profiles. A bar at the bottom keeps the running
+  totals in view.
 - **Player sheet:** tap any player anywhere for his value breakdown (model, FantasyCalc,
   DynastyProcess), projected points per game for three seasons, this season's scoring, a value
   trend, and a one-tap "build a trade" or "shop him" into the trade lab
@@ -64,7 +70,7 @@ Tables: `player_week`, `player_season`, `age_curve`, `draft_prior`, `player_proj
 - **Pick value:** 60% from what this league's past rookie picks are worth now at each
   overall pick (fitted curve, discounted 10% per year out), 40% from FantasyCalc and
   DynastyProcess pick values; averaged over the slot odds.
-- **Plan:** sell candidates are your veterans at their position's age cliff (QB 32, RB 26,
+- **Plan (built for every team):** sell candidates are the team's veterans at their position's age cliff (QB 32, RB 26,
   WR 28, TE 29) or projected to drop 15%+ in two seasons, with the contenders whose lineup
   they'd upgrade most; buy targets are players 24 or younger outside their team's best
   lineup, contenders' benches first.
@@ -80,9 +86,9 @@ redo windows, odds and pick values with the latest scores.
   same math.
 - **Lineup impact:** best possible starting lineup before vs after, for both teams, now
   (injured players out), next season and in two seasons.
-- **Trade finder:** searches 1-for-1 and 2-for-1 deals with every team (your players for
-  their players or picks), keeps fair ones that fit your window and, for contenders, improve
-  their lineup now, and ranks them.
+- **Trade finder:** run for every team. Searches 1-for-1 and 2-for-1 deals with every other
+  team (its players for their players or picks), keeps fair ones that fit its window and help
+  the partner's (contenders must improve now), and ranks them.
 - **Owner profiles:** trades and partners, each past trade judged by what both sides hold now,
   positions traded for, picks bought vs sold, waiver claims and FAAB, early-round draft habits
   here and in their other Sleeper leagues, with short tags for what stands out.
@@ -203,6 +209,6 @@ Run tests with `python -m unittest discover -s tests`.
 ## Design
 
 Game-day TV graphics: field green and chalk, with the yellow first-down line used for one thing
-only, marking you (your record, your row, your picks, your dot on the chart). Headings and
+only, marking the team you're viewing (its row, its picks, its dot on the chart). Headings and
 numbers use Big Shoulders Display (self-hosted in `site/fonts`, SIL Open Font License); body
 text uses the phone's own font. No build step: `site/` is plain HTML, CSS and JavaScript.
