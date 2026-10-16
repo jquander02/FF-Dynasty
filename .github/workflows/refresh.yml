@@ -94,6 +94,16 @@ jobs:
             echo "::error title=Refresh error::$msg"
           fi
 
+      # Scores the projection model against past seasons; never blocks the deploy.
+      - name: Backtest
+        if: success()
+        continue-on-error: true
+        run: |
+          python -m dynasty.backtest bundle data/dynasty.db backtest-bundle.json.gz
+          python -m dynasty.backtest run backtest-bundle.json.gz --json backtest-report.json | tee backtest.log
+          msg=$(python3 -c 'import sys; s=open("backtest.log").read(); print(s.replace("%","%25").replace("\n","%0A"))')
+          echo "::notice title=Backtest::$msg"
+
       # Compressed (SQLite shrinks ~4x) so the cache stays small and reliable.
       - name: Pack database
         if: success()
@@ -123,11 +133,13 @@ jobs:
         if: success()
         run: |
           cd site/data
+          mkdir -p backtest
+          cp ../../backtest-bundle.json.gz ../../backtest-report.json backtest/ 2>/dev/null || true
           git init -q -b site-data
           git add .
           git -c user.name="refresh-bot" -c user.email="refresh-bot@users.noreply.github.com" commit -qm "Data snapshot $(date -u +%FT%TZ)"
           git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" site-data
-          rm -rf .git
+          rm -rf .git backtest
 
       # Publishes site/ (app + freshly exported data) to GitHub Pages.
       - name: Configure Pages

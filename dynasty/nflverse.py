@@ -39,12 +39,12 @@ def _datasets() -> list[Dataset]:
         # Extras (bigger or slower)
         Dataset("nfl_depth_charts", lambda nfl, s: nfl.load_depth_charts([s]), history=1, extra="depth_charts"),
         Dataset("nfl_injuries", lambda nfl, s: nfl.load_injuries([s]), history=1, extra="injuries"),
-        Dataset("nfl_ngs_receiving", lambda nfl, s: nfl.load_nextgen_stats([s], stat_type="receiving"), extra="nextgen"),
-        Dataset("nfl_ngs_rushing", lambda nfl, s: nfl.load_nextgen_stats([s], stat_type="rushing"), extra="nextgen"),
-        Dataset("nfl_ngs_passing", lambda nfl, s: nfl.load_nextgen_stats([s], stat_type="passing"), extra="nextgen"),
-        Dataset("nfl_pfr_rec", lambda nfl, s: nfl.load_pfr_advstats([s], stat_type="rec", summary_level="season"), extra="pfr_advstats"),
-        Dataset("nfl_pfr_rush", lambda nfl, s: nfl.load_pfr_advstats([s], stat_type="rush", summary_level="season"), extra="pfr_advstats"),
-        Dataset("nfl_pfr_pass", lambda nfl, s: nfl.load_pfr_advstats([s], stat_type="pass", summary_level="season"), extra="pfr_advstats"),
+        Dataset("nfl_ngs_receiving", lambda nfl, s: nfl.load_nextgen_stats([s], stat_type="receiving"), history=5, extra="nextgen"),
+        Dataset("nfl_ngs_rushing", lambda nfl, s: nfl.load_nextgen_stats([s], stat_type="rushing"), history=5, extra="nextgen"),
+        Dataset("nfl_ngs_passing", lambda nfl, s: nfl.load_nextgen_stats([s], stat_type="passing"), history=5, extra="nextgen"),
+        Dataset("nfl_pfr_rec", lambda nfl, s: nfl.load_pfr_advstats([s], stat_type="rec", summary_level="season"), history=5, extra="pfr_advstats"),
+        Dataset("nfl_pfr_rush", lambda nfl, s: nfl.load_pfr_advstats([s], stat_type="rush", summary_level="season"), history=5, extra="pfr_advstats"),
+        Dataset("nfl_pfr_pass", lambda nfl, s: nfl.load_pfr_advstats([s], stat_type="pass", summary_level="season"), history=5, extra="pfr_advstats"),
         # Whole-table datasets (refreshed every run)
         Dataset("nfl_ff_playerids", lambda nfl, s: nfl.load_ff_playerids(), per_season=False),
         Dataset("nfl_contracts", lambda nfl, s: nfl.load_contracts(), per_season=False),

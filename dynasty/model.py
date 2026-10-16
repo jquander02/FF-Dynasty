@@ -52,6 +52,7 @@ class ModelConfig:
     season_games: int = 17
     discounts: tuple = (1.0, 0.9, 0.75, 0.6)  # rest-of-season, +1, +2, +3 seasons
     replacement_depth: float = 1.5        # replacement = starters x this, per position
+    growth_cap: float = 1.8               # max year-1 -> year-3 PPG growth from the draft-class trajectory
     teams: int = 12
     extra: dict = field(default_factory=dict)
 
@@ -106,8 +107,11 @@ def _cols(store: Store, t: str) -> set[str]:
 # ---------------------------------------------------------------------------
 # Age curves
 # ---------------------------------------------------------------------------
-def fit_age_curves(seasons: list[dict], birth: dict, current: int, cfg: ModelConfig) -> dict:
-    """{pos: {age: multiplier for age -> age+1}} via the delta method, shrunk to the prior."""
+def fit_age_curves(seasons: list[dict], birth: dict, current: int, cfg: ModelConfig,
+                   current_complete: bool = False) -> dict:
+    """{pos: {age: multiplier for age -> age+1}} via the delta method, shrunk to the prior.
+    The current season is left out while it's in progress (current_complete=False)."""
+    last = current + 1 if current_complete else current
     by_player = defaultdict(dict)
     for s in seasons:
         by_player[s["gsis_id"]][s["season"]] = s
@@ -116,7 +120,7 @@ def fit_age_curves(seasons: list[dict], birth: dict, current: int, cfg: ModelCon
         bd = birth.get(g)
         for yr, s0 in ss.items():
             s1 = ss.get(yr + 1)
-            if not s1 or yr + 1 >= current:  # current season is incomplete
+            if not s1 or yr + 1 >= last:  # current season is incomplete
                 continue
             if s0["games"] < cfg.min_games_curve or s1["games"] < cfg.min_games_curve:
                 continue
@@ -166,8 +170,9 @@ def age_factor(curves: dict, pos: str, from_age: float, to_age: float) -> float:
 # ---------------------------------------------------------------------------
 # Draft prior
 # ---------------------------------------------------------------------------
-def fit_draft_prior(picks: list[dict], seasons: list[dict], current: int) -> dict:
+def fit_draft_prior(picks: list[dict], seasons: list[dict], current: int, current_complete: bool = False) -> dict:
     """{(pos, bucket, nfl_year): expected points per game (missed games count as 0)}."""
+    last = current + 1 if current_complete else current
     pts = {(s["gsis_id"], s["season"]): s["pts"] for s in seasons}
     acc = defaultdict(list)
     for p in picks:
@@ -177,7 +182,7 @@ def fit_draft_prior(picks: list[dict], seasons: list[dict], current: int) -> dic
         b = pick_bucket(p["pick"])
         for n in (1, 2, 3):
             s = yr + n - 1
-            if s >= current:
+            if s >= last:
                 continue
             acc[(pos, b, n)].append(pts.get((p["gsis_id"], s), 0.0) / 17.0)
     # Pooled trajectory over picks 1-100 per position: a stable year 1 -> 3 growth curve
@@ -262,6 +267,87 @@ def replacement_levels(proj: dict[str, tuple[str, float]], roster_positions: lis
 # ---------------------------------------------------------------------------
 # Main build
 # ---------------------------------------------------------------------------
+def project(players: list[dict], seasons: list[dict], curves: dict, prior: dict, current: int,
+            cfg: ModelConfig) -> dict:
+    """Points-per-game projections from data through season `current`.
+
+    players: {key, gsis_id, position, name, years_exp, birth (date), draft ({year, pick}) or None}.
+    Returns key -> {ppg_ros (current season talent), ppg_y1, ppg_y2, ppg_y3, ...}. Used by the live
+    model (current = this season, in progress) and by the backtest (current = last finished season,
+    so ppg_y1 is the season being predicted)."""
+    hist = defaultdict(dict)
+    for srow in seasons:
+        if srow["season"] <= current:
+            hist[srow["gsis_id"]][srow["season"]] = srow
+    proj = {}
+    for p in players:
+        pid, pos, g = p["key"], p["position"], p["gsis_id"]
+        bd = p.get("birth")
+        age_now = age_on(bd, current)
+        ss = hist.get(g, {}) if g else {}
+
+        # draft prior for this player's NFL year
+        d = p.get("draft")
+        nfl_year = (current - d["year"] + 1) if d else ((p.get("years_exp") or 0) + 1)
+        bucket = pick_bucket(d["pick"]) if d else "UDFA"
+        prior_ppg = prior.get((pos, bucket, min(max(nfl_year, 1), 3)))
+        if prior_ppg is None:
+            prior_ppg = 0.0
+
+        num = den = 0.0
+        games_hist = 0
+        for i, w in enumerate(cfg.recency):
+            srow = ss.get(current - i)
+            if not srow or not srow["games"]:
+                continue
+            ppg = srow["ppg"]
+            if srow.get("xppg") is not None:
+                ppg = cfg.actual_vs_expected * ppg + (1 - cfg.actual_vs_expected) * srow["xppg"]
+            a_then = age_on(bd, current - i)
+            ppg *= age_factor(curves, pos, a_then, age_now) if a_then is not None else 1.0
+            num += w * srow["games"] * ppg
+            den += w * srow["games"]
+            games_hist += srow["games"]
+        young = nfl_year <= 3
+        pw = cfg.prior_games * (1.0 if young else 0.4)
+        talent = (num + pw * prior_ppg) / (den + pw) if (den + pw) else 0.0
+
+        def growth(n_from: int, n_to: int) -> float:
+            """Typical PPG change for this draft range between NFL years (years 1-3 only)."""
+            key = "POOLED" if (pos, "POOLED", 1) in prior else bucket
+            a = prior.get((pos, key, min(max(n_from, 1), 3)))
+            b = prior.get((pos, key, min(max(n_to, 1), 3)))
+            if not a or not b or a < 0.5:
+                return 1.0
+            return min(max(b / a, 0.8), cfg.growth_cap)
+
+        def at(season_offset: int) -> float:
+            # Early career: follow the draft class's year-1 -> year-3 trajectory instead of
+            # the age curve (it already contains the development jump); after year 3, age curve.
+            if nfl_year <= 3:
+                dev_years = min(3, nfl_year + season_offset) - max(nfl_year, 0)
+                dev_years = max(dev_years, 0)
+                base = talent * growth(nfl_year, nfl_year + dev_years)
+                rest = season_offset - dev_years
+                if rest <= 0 or age_now is None:
+                    return base
+                start = age_now + dev_years
+                return base * age_factor(curves, pos, start, start + rest)
+            if age_now is None:
+                return talent
+            return talent * age_factor(curves, pos, age_now, age_now + season_offset)
+
+        proj[pid] = {
+            "player_id": pid, "gsis_id": g, "position": pos, "name": p.get("name"),
+            "age": round(age_now, 1) if age_now else None, "nfl_year": nfl_year,
+            "draft_bucket": bucket, "games_history": games_hist,
+            "prior_ppg": round(prior_ppg, 2), "talent_ppg": round(talent, 2),
+            "ppg_ros": round(talent, 2), "ppg_y1": round(at(1), 2),
+            "ppg_y2": round(at(2), 2), "ppg_y3": round(at(3), 2),
+        }
+    return proj
+
+
 def build(store: Store, cfg: ModelConfig | None = None) -> dict:
     cfg = cfg or ModelConfig()
     if not _exists(store, "player_season"):
@@ -337,87 +423,23 @@ def build(store: Store, cfg: ModelConfig | None = None) -> dict:
         {"position": k[0], "bucket": k[1], "nfl_year": k[2], "ppg": v} for k, v in sorted(prior.items())
     ])
 
-    hist = defaultdict(dict)
-    for s in seasons:
-        hist[s["gsis_id"]][s["season"]] = s
-
-    players = store.query(
+    players = []
+    for p in store.query(
         """SELECT p.player_id, p.full_name, p.position, p.years_exp, p.status, p.team, x.gsis_id,
                   EXISTS(SELECT 1 FROM roster_snapshot rs WHERE rs.player_id=p.player_id) rostered
            FROM player p LEFT JOIN player_xref x ON x.player_id=p.player_id
            WHERE p.position IN ('QB','RB','WR','TE')"""
-    )
-
-    proj = {}
-    for p in players:
-        pid, pos, g = p["player_id"], p["position"], p["gsis_id"]
-        active = p["status"] == "Active" or p["team"] or p["rostered"]
-        if not active:
+    ):
+        if not (p["status"] == "Active" or p["team"] or p["rostered"]):
             continue
-        bd = birth.get(g) if g else None
-        bd = bd or sleeper_birth.get(pid)
-        age_now = age_on(bd, current)
-        ss = hist.get(g, {}) if g else {}
-
-        # draft prior for this player's NFL year
-        d = draft_by_gsis.get(g) if g else None
-        d = d or draft_by_sleeper.get(pid)
-        nfl_year = (current - d["year"] + 1) if d else ((p["years_exp"] or 0) + 1)
-        bucket = pick_bucket(d["pick"]) if d else "UDFA"
-        prior_ppg = prior.get((pos, bucket, min(max(nfl_year, 1), 3)))
-        if prior_ppg is None:
-            prior_ppg = 0.0
-
-        num = den = 0.0
-        games_hist = 0
-        for i, w in enumerate(cfg.recency):
-            s = ss.get(current - i)
-            if not s or not s["games"]:
-                continue
-            ppg = s["ppg"]
-            if s.get("xppg") is not None:
-                ppg = cfg.actual_vs_expected * ppg + (1 - cfg.actual_vs_expected) * s["xppg"]
-            a_then = age_on(bd, current - i)
-            ppg *= age_factor(curves, pos, a_then, age_now) if a_then is not None else 1.0
-            num += w * s["games"] * ppg
-            den += w * s["games"]
-            games_hist += s["games"]
-        young = nfl_year <= 3
-        pw = cfg.prior_games * (1.0 if young else 0.4)
-        talent = (num + pw * prior_ppg) / (den + pw) if (den + pw) else 0.0
-
-        def growth(n_from: int, n_to: int) -> float:
-            """Typical PPG change for this draft range between NFL years (years 1-3 only)."""
-            key = "POOLED" if (pos, "POOLED", 1) in prior else bucket
-            a = prior.get((pos, key, min(max(n_from, 1), 3)))
-            b = prior.get((pos, key, min(max(n_to, 1), 3)))
-            if not a or not b or a < 0.5:
-                return 1.0
-            return min(max(b / a, 0.8), 1.8)
-
-        def at(season_offset: int) -> float:
-            # Early career: follow the draft class's year-1 -> year-3 trajectory instead of
-            # the age curve (it already contains the development jump); after year 3, age curve.
-            if nfl_year <= 3:
-                dev_years = min(3, nfl_year + season_offset) - nfl_year
-                base = talent * growth(nfl_year, nfl_year + dev_years)
-                rest = season_offset - dev_years
-                if rest <= 0 or age_now is None:
-                    return base
-                start = age_now + dev_years
-                return base * age_factor(curves, pos, start, start + rest)
-            if age_now is None:
-                return talent
-            return talent * age_factor(curves, pos, age_now, age_now + season_offset)
-
-        proj[pid] = {
-            "player_id": pid, "gsis_id": g, "position": pos, "name": p["full_name"],
-            "age": round(age_now, 1) if age_now else None, "nfl_year": nfl_year,
-            "draft_bucket": bucket, "games_history": games_hist,
-            "prior_ppg": round(prior_ppg, 2), "talent_ppg": round(talent, 2),
-            "ppg_ros": round(talent, 2), "ppg_y1": round(at(1), 2),
-            "ppg_y2": round(at(2), 2), "ppg_y3": round(at(3), 2),
-        }
+        g, pid = p["gsis_id"], p["player_id"]
+        players.append({
+            "key": pid, "gsis_id": g, "position": p["position"], "name": p["full_name"],
+            "years_exp": p["years_exp"],
+            "birth": (birth.get(g) if g else None) or sleeper_birth.get(pid),
+            "draft": (draft_by_gsis.get(g) if g else None) or draft_by_sleeper.get(pid),
+        })
+    proj = project(players, seasons, curves, prior, current, cfg)
 
     repl, starters = replacement_levels(
         {k: (v["position"], v["ppg_y1"]) for k, v in proj.items()},
