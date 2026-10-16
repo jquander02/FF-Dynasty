@@ -8,8 +8,9 @@ Pieces (all fit from nflverse history, so they follow the data as seasons are ad
                  used to fill in for rookies and players with little history
   talent       — recent points per game (blended with expected points), age-adjusted,
                  weighted by recency and games, with the draft prior as a pseudo-sample
-  model value  — sum over rest-of-season + next 3 seasons of games x (projected PPG -
-                 replacement PPG), discounted by year
+  model value  — sum over rest-of-season + next 3 seasons of games x expected PPG above
+                 replacement (projection treated as a range, wider for young players and
+                 further-out seasons, so upside counts), discounted by year
 
 Writes: age_curve, draft_prior, player_projection.
 """
@@ -192,6 +193,24 @@ def fit_draft_prior(picks: list[dict], seasons: list[dict], current: int) -> dic
                     if alt:
                         prior[(pos, b, n)] = alt[0]
     return prior
+
+
+# ---------------------------------------------------------------------------
+# Upside: expected points above replacement under uncertainty
+# ---------------------------------------------------------------------------
+def uncertainty(games_history: float) -> float:
+    """Coefficient of variation of a PPG projection: ~0.62 with no NFL games, ~0.24 for veterans."""
+    return 0.22 + 0.40 * math.exp(-(games_history or 0) / 25.0)
+
+
+def expected_excess(mu: float, sigma: float, repl: float) -> float:
+    """E[max(0, X - repl)] for X ~ Normal(mu, sigma). Gives uncertain players option value."""
+    if sigma <= 1e-9:
+        return max(0.0, mu - repl)
+    d = (mu - repl) / sigma
+    pdf = math.exp(-0.5 * d * d) / math.sqrt(2 * math.pi)
+    cdf = 0.5 * (1 + math.erf(d / math.sqrt(2)))
+    return max(0.0, (mu - repl) * cdf + sigma * pdf)
 
 
 # ---------------------------------------------------------------------------
@@ -402,11 +421,12 @@ def build(store: Store, cfg: ModelConfig | None = None) -> dict:
     games_ros = remaining * cfg.availability
     for v in proj.values():
         r = repl.get(v["position"], 0.0)
+        cv0 = uncertainty(v["games_history"])
         parts = [
-            cfg.discounts[0] * games_ros * max(0.0, v["ppg_ros"] - r),
-            cfg.discounts[1] * games_full * max(0.0, v["ppg_y1"] - r),
-            cfg.discounts[2] * games_full * max(0.0, v["ppg_y2"] - r),
-            cfg.discounts[3] * games_full * max(0.0, v["ppg_y3"] - r),
+            cfg.discounts[0] * games_ros * expected_excess(v["ppg_ros"], cv0 * v["ppg_ros"], r),
+            cfg.discounts[1] * games_full * expected_excess(v["ppg_y1"], (cv0 + 0.06) * v["ppg_y1"], r),
+            cfg.discounts[2] * games_full * expected_excess(v["ppg_y2"], (cv0 + 0.12) * v["ppg_y2"], r),
+            cfg.discounts[3] * games_full * expected_excess(v["ppg_y3"], (cv0 + 0.18) * v["ppg_y3"], r),
         ]
         v["repl_ppg"] = round(r, 2)
         v["model_value"] = round(sum(parts), 1)

@@ -81,6 +81,15 @@ class ModelPiecesTest(unittest.TestCase):
         self.assertLess(model.age_factor(curves, "RB", 28, 30), 0.85)
         self.assertAlmostEqual(model.age_factor(curves, "QB", 29, 29), 1.0)
 
+    def test_expected_excess_gives_upside(self):
+        self.assertAlmostEqual(model.expected_excess(10, 0, 7), 3.0)
+        self.assertEqual(model.expected_excess(5, 0, 7), 0.0)
+        # same average, more uncertainty -> more value above replacement
+        low, high = model.expected_excess(7, 1.0, 7), model.expected_excess(7, 4.0, 7)
+        self.assertGreater(high, low)
+        self.assertGreater(model.expected_excess(6, 3.5, 7), 0.5)
+        self.assertGreater(model.uncertainty(0), model.uncertainty(80))
+
     def test_pick_bucket(self):
         self.assertEqual(model.pick_bucket(5), "1-12")
         self.assertEqual(model.pick_bucket(33), "33-64")
