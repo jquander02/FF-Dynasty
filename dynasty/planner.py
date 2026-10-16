@@ -288,6 +288,8 @@ def _plan(lg: League, rid: int) -> dict:
     pval = tw.get("player_value") or 0
 
     title = STRATEGY[key].format(target=tseason)
+    if key == "allin" and st["pt"] < 0.10:
+        title = "Win now while it lasts"
     summary = {
         "sustain": f"A top lineup now and still one in {season + 2}. Add for this year's title with bench depth and "
                    f"distant picks, and keep the young core.",
@@ -514,10 +516,10 @@ def _plan(lg: League, rid: int) -> dict:
 
 def _goal(key: str, T: int, y: int, rank: int, p_title: float) -> str:
     if key == "sustain":
-        return "Win the title" if y == 0 else "Contend"
+        return "Win the title" if y == 0 and p_title >= 0.10 else "Contend"
     if key == "allin":
         if y == 0:
-            return "Win the title"
+            return "Win the title" if p_title >= 0.10 else "Contend"
         return "Contend" if rank <= 5 else "Retool"
     if key == "climb":
         if y == 0:
@@ -555,7 +557,7 @@ def _moves(lg: League, rid: int, key: str, T: int, y: int, goal: str, holes, agi
     if y == 0:
         if not open_deadline:
             out.append("The trade deadline has passed: set the best lineup each week and plan the offseason.")
-        elif goal == "Win the title":
+        elif goal == "Win the title" or (goal == "Contend" and key in ("sustain", "allin")):
             fits = [b for b in buy if b["season"] == sy]
             hole = holes[0]["slot"] if holes else None
             if fits:
