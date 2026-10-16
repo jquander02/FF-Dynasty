@@ -17,7 +17,7 @@
     give: new Set(), get: new Set(),
     pickTeam: "all", valOwner: "all", valPos: "ALL", valQuery: "", valLimit: 100,
     valSort: "val", rosterSort: "val", pickSort: "slot",
-    histTeam: "all", histWith: "all", histSort: "new",
+    histTeam: "all", histWith: "all", histSort: "new", mgr: null,
     sort: {},              // per-table column sort: id -> {key, dir}
     lastFocus: null,
   };
@@ -633,42 +633,201 @@
   }
 
   // ---------------------------------------------------------------- Owners
+  const SELLERS = new Set(["reload", "rebuild"]);
+  const BUYERS = new Set(["sustain", "allin", "run"]);
+  const daysAgo = (ms) => (ms ? Math.max(0, Math.round((Date.now() - ms) / 86400000)) : null);
+  const agoText = (d) => (d == null ? "no moves yet" : d === 0 ? "today" : d === 1 ? "yesterday" : `${d} days ago`);
+  const posList = (o) => Object.entries(o || {}).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(", ") || "none";
+  const MOVE_NAME = { trade: "trade", waiver: "waiver claim", free_agent: "free-agent add", commissioner: "commissioner move" };
+
+  // Plain-language advice for approaching a manager, from their plan, needs and trade history.
+  function scoutTips(p) {
+    const sc = p.scout || {};
+    const P = (D.plan || {})[p.roster_id];
+    const tips = [];
+    const dl = D.meta?.settings?.trade_deadline;
+    if (P?.strategy) {
+      const key = P.strategy.key, tgt = P.strategy.target_season;
+      const holes = (P.years?.[0]?.holes || []).map((h) => h.slot);
+      const holesLater = ((P.years || []).find((y) => y.season === tgt)?.holes || []).map((h) => h.slot);
+      const sells = (P.sell || []).slice(0, 2).map((c) => c.name);
+      if (key === "run") {
+        tips.push(`Making a run with a lineup that fades after this season: they'll add cheap veteran starters${holes.length ? ` at ${holes.join(", ")}` : ""} but shouldn't pay in firsts. Their future picks may be gettable.`);
+      } else if (key === "climb") {
+        tips.push(`Competing now but built for ${tgt}: open to cheap upgrades${holes.length ? ` at ${holes.join(", ")}` : ""}, holding on to picks and young players.`);
+      } else if (BUYERS.has(key)) {
+        tips.push(`Buying for ${tgt}${holes.length ? `, thinnest at ${holes.join(", ")}` : ""}: pitch a starter there for picks or young players${dl ? ` before the week ${dl} deadline` : ""}.`);
+      } else if (SELLERS.has(key)) {
+        tips.push(`Building for ${tgt}: likely to sell veterans${sells.length ? ` like ${sells.join(" and ")}` : ""}. Lead with picks or players 24 and under${holesLater.length ? `; they'll want help at ${holesLater.join(", ")}` : ""}.`);
+      } else if (key === "deadline") {
+        tips.push(`On the playoff bubble: they could buy or sell by week ${dl}. Offer both ways${sells.length ? ` (their veterans: ${sells.join(", ")})` : ""}.`);
+      } else {
+        tips.push(`Aiming at ${tgt}: they want young starters${holesLater.length ? ` at ${holesLater.join(", ")}` : ""} and won't spend their future on this season.`);
+      }
+    }
+    if (sc.got_age && sc.gave_age) {
+      const d = sc.gave_age - sc.got_age;
+      if (d >= 2) tips.push(`Trades for youth: players they get are ${d.toFixed(1)} years younger on average than what they give. Young players open doors.`);
+      else if (d <= -2) tips.push(`Trades for veterans: they take on players ${(-d).toFixed(1)} years older than they give. Your aging starters fit here.`);
+    }
+    const pc = sc.pieces || {};
+    if (p.trades >= 3 && pc.got && pc.gave) {
+      if (pc.gave - pc.got >= 0.5) tips.push(`Consolidates: gives ${pc.gave} pieces for ${pc.got} on average. Ask for their depth for one of your stars.`);
+      else if (pc.got - pc.gave >= 0.5) tips.push(`Splits stars into depth: takes ${pc.got} pieces for ${pc.gave}. Offer two good players for one of theirs.`);
+    }
+    const pk = sc.picks || {};
+    if ((pk.firsts_gave || 0) - (pk.firsts_got || 0) >= 2) tips.push(`Has traded away ${pk.firsts_gave} first-round picks (got ${pk.firsts_got}): their firsts are on the table.`);
+    else if ((pk.firsts_got || 0) - (pk.firsts_gave || 0) >= 2) tips.push(`Collects first-round picks (got ${pk.firsts_got}, gave ${pk.firsts_gave}): expect them to ask for picks.`);
+    if (sc.avg_margin != null && p.trades >= 3) {
+      if (sc.avg_margin >= 400) tips.push(`Comes out ahead: +${fmt(sc.avg_margin)} per trade at today's values. Expect hard bargaining.`);
+      else if (sc.avg_margin <= -400) tips.push(`Past trades have favored their partners (${fmt(sc.avg_margin)} per trade at today's values).`);
+    }
+    const d = daysAgo(sc.last_move);
+    if (d != null && d >= 21) tips.push(`No moves in ${d} days: may be slow to answer.`);
+    else if ((sc.moves_30d || 0) >= 8) tips.push(`Very active (${sc.moves_30d} moves in 30 days): likely to answer quickly.`);
+    if (sc.timing && sc.timing.offseason + sc.timing.in_season >= 4 && sc.timing.offseason / (sc.timing.offseason + sc.timing.in_season) >= 0.7) {
+      tips.push("Does most trading in the offseason.");
+    }
+    return tips.slice(0, 5);
+  }
+
+  // Compact card (trade lab "About" panels).
   function profileCard(p, compactCard = false) {
-    const pos = Object.entries(p.acquired_positions || {}).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(", ");
-    const mix = Object.entries(p.draft_mix_other_leagues || {}).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${Math.round(v * 100)}%`).join(", ");
+    const sc = p.scout || {};
+    const r = sc.trade_record || {};
+    const tips = scoutTips(p).slice(0, 3);
     return `
       <div class="group pad">
         ${compactCard ? "" : `<div class="entry-head"><b>${esc(p.team)}${userTag(p.owner)}</b>${winChip(p.window)}</div>`}
         ${(p.tags || []).length ? `<div class="tags">${p.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join("")}</div>` : ""}
+        ${tips.length ? `<ul class="tips">${tips.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>` : ""}
         <dl class="facts">
-          <dt>Trades</dt><dd>${p.trades}${p.trades ? `, net <span class="${signCls(p.trade_net)}">${p.trade_net >= 0 ? "+" : ""}${fmt(p.trade_net)}</span> at today's values. <a href="#trades" data-hist="${p.roster_id}">See them</a>` : ""}</dd>
-          ${(p.partners || []).length ? `<dt>Trades with</dt><dd>${p.partners.map((x) => `${nameHTML(x.team)} (${x.n})`).join(", ")}</dd>` : ""}
-          ${pos ? `<dt>Trades for</dt><dd>${pos}</dd>` : ""}
-          <dt>Picks</dt><dd>${p.picks_in} acquired, ${p.picks_out} traded away</dd>
-          <dt>Waivers</dt><dd>${p.waiver_adds} claims, $${fmt(p.faab_spent)} FAAB this season${p.max_bid ? ` (top bid $${fmt(p.max_bid)})` : ""}</dd>
-          ${!compactCard && mix ? `<dt>Drafts early</dt><dd>${mix} in ${p.other_leagues} other leagues</dd>` : ""}
+          <dt>Trades</dt><dd>${p.trades ? `${r.won}–${r.lost}–${r.even} (won, lost, even), net <span class="${signCls(p.trade_net)}">${signed(p.trade_net)}</span>. <a href="#trades" data-hist="${p.roster_id}">See them</a>` : "none yet"}</dd>
+          <dt>Last move</dt><dd>${agoText(daysAgo(sc.last_move))}</dd>
         </dl>
+        <p class="note"><a href="#owners" data-mgr="${p.roster_id}">Full scouting report</a></p>
       </div>`;
   }
+
+  function mgrSection(title, body) {
+    return body ? `<section class="mgr-sec"><h3>${title}</h3>${body}</section>` : "";
+  }
+
+  function scoutReport(p) {
+    const sc = p.scout || {};
+    const P = (D.plan || {})[p.roster_id];
+    const t = teamOf(p.roster_id);
+    const r = sc.trade_record || {};
+    const pk = sc.picks || {};
+    const pc = sc.pieces || {};
+    const tm = sc.timing || {};
+    const y0 = P?.years?.[0], ytgt = (P?.years || []).find((y) => y.season === P?.strategy?.target_season);
+    const spot = (x) => `<li><b>${esc(x.slot)}</b> ${x.name ? `${esc(x.name)} ` : ""}<span class="muted">${f1(x.ppg)} ppg vs ${f1(x.median)} league median</span></li>`;
+    const needs = [
+      y0?.holes?.length ? `<p class="lbl">This season</p><ul class="spots">${y0.holes.map(spot).join("")}</ul>` : "",
+      ytgt && ytgt !== y0 && ytgt.holes?.length ? `<p class="lbl">${ytgt.season} (their target)</p><ul class="spots">${ytgt.holes.map(spot).join("")}</ul>` : "",
+      (!ytgt || ytgt === y0) && P?.years?.[1]?.holes?.length ? `<p class="lbl">Next season</p><ul class="spots">${P.years[1].holes.map(spot).join("")}</ul>` : "",
+      y0?.strong?.length ? `<p class="lbl">Deep at</p><ul class="spots">${y0.strong.map((x) => `<li><b>${esc(x.slot)}</b> ${esc(x.name || "")} <span class="up">+${f1(x.gap)}</span></li>`).join("")}</ul>` : "",
+    ].join("");
+    const moves = (P?.sell || []).slice(0, 5);
+    const chips = (P?.chips || []).slice(0, 3);
+    const d = daysAgo(sc.last_move);
+    const cur = (sc.seasons || []).find((x) => !x.complete);
+    const statRow = (label, value, note = "") => `<div class="stat"><span>${label}</span><b>${value}</b>${note ? `<small>${note}</small>` : ""}</div>`;
+    const ages = sc.got_age && sc.gave_age ? `${f1(sc.got_age)} / ${f1(sc.gave_age)}` : "–";
+    return `
+      <section class="mgr-head">
+        <p class="who">${esc(t?.team || p.team)}${userTag(p.owner)} ${winChip(p.window)}</p>
+        <h2>${esc(P?.strategy?.title || "Manager")}</h2>
+        <p class="lede">${t ? `${record(t)}, ${pct(t.p_playoffs)} playoff odds. ` : ""}Last move ${agoText(d)}${sc.last_move_type ? ` (${MOVE_NAME[sc.last_move_type] || sc.last_move_type})` : ""}; ${plural(sc.moves_30d || 0, "move")} in the last 30 days.</p>
+        ${(p.tags || []).length ? `<div class="tags">${p.tags.map((x) => `<span class="tag">${esc(x)}</span>`).join("")}</div>` : ""}
+        <div class="mgr-actions">
+          <button class="btn primary" data-tradewith="${p.roster_id}">Build a trade with them</button>
+          <a class="btn" href="#trades" data-hist="${p.roster_id}">Their ${plural(p.trades, "trade")}</a>
+          <a class="btn" href="#plan" data-roster="${p.roster_id}">Their plan</a>
+        </div>
+      </section>
+      ${(() => { const tips = scoutTips(p); return tips.length ? `<h2>How to approach them</h2><div class="group pad"><ul class="tips big">${tips.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""; })()}
+      <div class="cols">
+        <div>
+          <h2>What they need</h2>
+          <div class="group pad">${needs || `<p class="note">No weak spots against the league median.</p>`}</div>
+        </div>
+        <div>
+          <h2>What they'd move</h2>
+          <div class="group">${moves.map((c) => planRow(c, [esc(c.reason)])).join("")}
+            ${chips.map((c) => `<div class="pick"><span class="slot">${c.season}</span><span><span class="pname">Round ${c.round}${c.own ? "" : ` <span class="muted">from ${esc(c.from)}</span>`}</span><span class="meta"><span>${c.exp_slot ? `about ${slotLabel(c.round, c.exp_slot)}` : ""}</span></span></span><span class="val"><b>${fmt(c.value)}</b></span></div>`).join("")}
+            ${!moves.length && !chips.length ? `<div class="empty">Nothing obvious to pry loose.</div>` : ""}</div>
+        </div>
+      </div>
+      <h2>How they trade</h2>
+      <div class="group pad">
+        <div class="stats">
+          ${statRow("Record", p.trades ? `${r.won}–${r.lost}–${r.even}` : "–", "won, lost, even")}
+          ${statRow("Net value", p.trades ? signed(p.trade_net) : "–", sc.avg_margin != null ? `${signed(sc.avg_margin)} per trade` : "")}
+          ${statRow("Pieces per deal", pc.got != null ? `${pc.got} / ${pc.gave}` : "–", "get / give")}
+          ${statRow("Player age", ages, "get / give")}
+          ${statRow("Picks", `${pk.got || 0} / ${pk.gave || 0}`, `firsts ${pk.firsts_got || 0} / ${pk.firsts_gave || 0}`)}
+          ${statRow("When", `${tm.in_season || 0} / ${tm.offseason || 0}`, "in season / offseason")}
+        </div>
+        <dl class="facts">
+          <dt>Gets</dt><dd>${posList(sc.got_pos)}</dd>
+          <dt>Gives</dt><dd>${posList(sc.gave_pos)}</dd>
+          ${(sc.vs || []).length ? `<dt>Partners</dt><dd><ul class="partners">${sc.vs.slice(0, 6).map((x) => `<li><span>${nameHTML(x.team)}</span><span class="muted">${plural(x.n, "trade")}</span><b class="${signCls(x.net)}">${signed(x.net)}</b></li>`).join("")}</ul></dd>` : ""}
+          ${sc.best_trade ? `<dt>Best / worst</dt><dd><span class="up">${signed(sc.best_margin)}</span> / <span class="${signCls(sc.worst_margin)}">${signed(sc.worst_margin)}</span> <a href="#trades" data-hist="${p.roster_id}" data-histsort="best">see them</a></dd>` : ""}
+        </dl>
+      </div>
+      <div class="cols">
+        <div>
+          <h2>Track record</h2>
+          <div class="group pad">
+            <table class="mini"><thead><tr><th>Season</th><th class="num">Record</th><th class="num">Finish</th><th class="num">Lineups</th></tr></thead>
+              <tbody>${(sc.seasons || []).slice().reverse().map((x) => `<tr><td>${x.season}${x.complete ? "" : " <span class=\"muted\">so far</span>"}</td>
+                <td class="num">${x.wins}–${x.losses}${x.ties ? `–${x.ties}` : ""}</td>
+                <td class="num">${x.place ? (x.place === 1 ? "Champion" : ordinal(x.place)) : `${ordinal(x.rank)} in standings`}</td>
+                <td class="num">${x.eff ? `<span class="${x.league_eff && x.eff >= x.league_eff ? "up" : "down"}">${Math.round(x.eff * 100)}%</span>` : "–"}</td></tr>`).join("")}</tbody></table>
+            <p class="note">Lineups: points scored as a share of the best lineup they could have started${cur?.league_eff ? ` (league average ${Math.round(cur.league_eff * 100)}% this season)` : ""}.</p>
+          </div>
+        </div>
+        <div>
+          <h2>Rookie drafts</h2>
+          <div class="group">${(sc.rookie_picks || []).slice(0, 8).map((x) => {
+            const tag = byId[x.id] ? "button" : "div";
+            return `<${tag} class="past-row" ${tag === "button" ? `type="button" data-player="${esc(x.id)}"` : ""}><span class="slotno">${x.season}</span><span><span class="aname">${esc(x.name || "?")}</span><span class="meta"><span>round ${x.round}, pick ${x.pick_no}</span></span></span><span class="aval">${fmt(x.value)}</span></${tag}>`; }).join("") || `<div class="empty">No rookie picks made here yet.</div>`}
+          </div>
+          ${sc.rookie_score != null ? `<p class="note">Their picks are worth ${Math.round(sc.rookie_score * 100)}% of what the league's picks in the same rounds are worth today.</p>` : ""}
+          <dl class="facts" style="margin-top:8px">
+            <dt>Waivers</dt><dd>${p.waiver_adds} claims, ${p.fa_adds} free-agent adds, $${fmt(p.faab_spent)} FAAB this season${p.max_bid ? ` (top bid $${fmt(p.max_bid)})` : ""}</dd>
+            ${Object.keys(p.draft_mix_other_leagues || {}).length ? `<dt>Elsewhere</dt><dd>Early picks in ${p.other_leagues} other leagues: ${Object.entries(p.draft_mix_other_leagues).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${Math.round(v * 100)}%`).join(", ")}</dd>` : ""}
+          </dl>
+        </div>
+      </div>`;
+  }
+
   function renderOwners() {
     const O = D.owners || { profiles: [] };
+    if (!O.profiles.length) return `<div class="empty"><b>No manager data yet</b>Profiles fill in after the next refresh.</div>`;
+    const rid = state.mgr ?? state.team ?? O.profiles[0].roster_id;
+    const p = O.profiles.find((x) => x.roster_id === rid) || O.profiles[0];
     const cols = [
-      { key: "team", label: "Team", value: (p) => (p.team || "").toLowerCase(),
-        html: (p) => `<span class="tname">${esc(p.team)}</span><span class="sub2"><span class="user">@${esc(p.owner)}</span>${winChip(p.window)}</span>` },
-      { key: "trades", label: "Trades", num: 1, value: (p) => p.trades, html: (p) => p.trades },
-      { key: "net", label: "Net", num: 1, value: (p) => p.trade_net, html: (p) => `<span class="${signCls(p.trade_net)}">${p.trade_net > 0 ? "+" : ""}${compact(p.trade_net)}</span>` },
-      { key: "pin", label: "Picks in", num: 1, wide: 1, value: (p) => p.picks_in, html: (p) => p.picks_in },
-      { key: "pout", label: "Picks out", num: 1, wide: 1, value: (p) => p.picks_out, html: (p) => p.picks_out },
-      { key: "claims", label: "Claims", num: 1, wide: 1, value: (p) => p.waiver_adds, html: (p) => p.waiver_adds },
-      { key: "faab", label: "FAAB", num: 1, value: (p) => p.faab_spent, html: (p) => `$${fmt(p.faab_spent)}` },
+      { key: "team", label: "Team", value: (x) => (x.team || "").toLowerCase(),
+        html: (x) => `<a class="tname" href="#owners" data-mgr="${x.roster_id}">${esc(x.team)}</a><span class="sub2"><span class="user">@${esc(x.owner)}</span></span>` },
+      { key: "plan", label: "Plan", wide: 1, value: (x) => (D.plan?.[x.roster_id]?.strategy?.title || ""), html: (x) => esc(D.plan?.[x.roster_id]?.strategy?.title || "–") },
+      { key: "trades", label: "Trades", num: 1, value: (x) => x.trades, html: (x) => { const r = x.scout?.trade_record; return r ? `${r.won}–${r.lost}–${r.even}` : x.trades; } },
+      { key: "net", label: "Net", num: 1, value: (x) => x.trade_net, html: (x) => `<span class="${signCls(x.trade_net)}">${x.trade_net > 0 ? "+" : ""}${compact(x.trade_net)}</span>` },
+      { key: "last", label: "Last move", num: 1, value: (x) => -(x.scout?.last_move || 0), html: (x) => { const d = daysAgo(x.scout?.last_move); return d == null ? "–" : `${d}d`; } },
+      { key: "eff", label: "Lineups", num: 1, wide: 1, value: (x) => (x.scout?.seasons || []).find((y) => !y.complete)?.eff ?? null,
+        html: (x) => { const e = (x.scout?.seasons || []).find((y) => !y.complete)?.eff; return e ? `${Math.round(e * 100)}%` : "–"; } },
+      { key: "faab", label: "FAAB", num: 1, wide: 1, value: (x) => x.faab_spent, html: (x) => `$${fmt(x.faab_spent)}` },
     ];
     return `
-      <h2>Managers<span class="count">${O.profiles.length}</span></h2>
-      ${sortableTable("owners", cols, O.profiles, { key: "trades", dir: -1 }, (p) => (p.roster_id === state.team ? "me" : ""))}
-      <div class="cols" style="margin-top:12px">${O.profiles.map((p) => profileCard(p)).join("")}</div>
-      <p class="note" style="margin-top:12px"><a href="#trades" data-hist="all">Every past trade, judged at today's values</a></p>
-      ${how("How profiles are built", [
-        `From every trade, waiver claim and draft in this league's history, plus each manager's early-round picks in their other Sleeper leagues. Net is the total of every trade's result at today's values (see Past trades), with used draft picks counted as the player taken. Tap a column heading to sort.`,
+      <div class="controls"><select id="mgr-pick" aria-label="Manager">${teamOptions(p.roster_id)}</select></div>
+      ${scoutReport(p)}
+      <h2>All managers<span class="count">${O.profiles.length}</span></h2>
+      ${sortableTable("owners", cols, O.profiles, { key: "trades", dir: -1 }, (x) => (x.roster_id === p.roster_id ? "me" : ""))}
+      ${how("How the scouting reports work", [
+        `Built from every trade, waiver claim and draft in this league's history. Trade results use today's values, with used draft picks counted as the player taken; a trade is even within 10%. "Pieces per deal" and "player age" compare what they get with what they give.`,
+        `Needs and players they'd move come from their team plan (the Plan tab): weak spots are starting slots below the league's median starter. Lineups is points scored as a share of the best lineup they could have started. Advice is generated from all of this; treat it as a starting point.`,
       ])}`;
   }
 
@@ -937,7 +1096,21 @@
       return;
     }
     const hl = t.closest("[data-hist]");
-    if (hl) { state.histTeam = hl.dataset.hist; state.histWith = hl.dataset.with || "all"; if (location.hash === "#trades") route(); }
+    if (hl) {
+      state.histTeam = hl.dataset.hist; state.histWith = hl.dataset.with || "all";
+      if (hl.dataset.histsort) state.histSort = hl.dataset.histsort;
+      if (location.hash === "#trades") route();
+    }
+    const mg = t.closest("[data-mgr]");
+    if (mg) { state.mgr = Number(mg.dataset.mgr); if (location.hash === "#owners") { rerender(); window.scrollTo(0, 0); } }
+    const tw = t.closest("[data-tradewith]");
+    if (tw) {
+      const rid = Number(tw.dataset.tradewith);
+      state.partner = rid; if (state.team === rid) setTeam(null);
+      state.give.clear(); state.get.clear();
+      location.hash = "#trade";
+      return;
+    }
     const r = t.closest("[data-roster]");
     if (r) { setTeam(Number(r.dataset.roster)); }
     const vp = t.closest("[data-vp]");
@@ -980,6 +1153,7 @@
       case "pick-team": state.pickTeam = t.value; rerender(); break;
       case "pick-sort": state.pickSort = t.value; rerender(); break;
       case "hist-team": state.histTeam = t.value; state.histWith = "all"; rerender(); break;
+      case "mgr-pick": state.mgr = num; rerender(); break;
       case "hist-with": state.histWith = t.value; rerender(); break;
       case "hist-sort": state.histSort = t.value; rerender(); break;
       case "roster-sort": state.rosterSort = t.value; rerender(); break;

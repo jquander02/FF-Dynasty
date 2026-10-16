@@ -444,3 +444,29 @@ button.past-row:focus-visible { outline: 2px solid var(--turf); outline-offset: 
 .yfacts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 10px; margin: 8px 0 0; font-size: 12.5px; border-top: 1px solid var(--line); padding-top: 8px; }
 .yfacts dt { color: var(--muted); font-weight: 600; }
 .yfacts dd { margin: 0; }
+
+/* ---------- manager scouting ---------- */
+.mgr-head { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-group); padding: 14px 16px; border-left: 5px solid var(--turf); }
+.mgr-head .who { margin: 0 0 2px; font-size: 13px; color: var(--muted); }
+.mgr-head h2 { font: 800 30px/1.05 var(--display); margin: 2px 0 6px; }
+.mgr-head .lede { margin: 0 0 8px; font-size: 14px; }
+.mgr-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.mgr-actions .btn { text-decoration: none; display: inline-flex; align-items: center; }
+.tips { margin: 6px 0 8px; padding-left: 18px; font-size: 13.5px; }
+.tips li + li { margin-top: 4px; }
+.tips.big { font-size: 15px; margin: 0; }
+.tips.big li + li { margin-top: 8px; }
+.lbl { margin: 6px 0 2px; font-size: 12px; font-weight: 700; color: var(--muted); }
+.lbl:first-child { margin-top: 0; }
+.spots { list-style: none; margin: 0 0 6px; padding: 0; font-size: 14px; }
+.spots li { padding: 3px 0; }
+.spots b { display: inline-block; min-width: 48px; font: 800 14px var(--display); letter-spacing: .02em; }
+.stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; margin-bottom: 10px; }
+@media (min-width: 700px) { .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.stat { border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.stat span { display: block; font-size: 12px; color: var(--muted); }
+.stat b { display: block; font: 800 22px/1.15 var(--display); font-variant-numeric: tabular-nums; }
+.stat small { display: block; font-size: 11.5px; color: var(--muted); }
+.partners { list-style: none; margin: 0; padding: 0; }
+.partners li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: baseline; padding: 2px 0; }
+.partners b { font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }

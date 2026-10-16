@@ -40,7 +40,15 @@ that column (tap again to reverse); player and pick lists have a "Sort by" menu.
 - **Player sheet:** tap any player anywhere for his value breakdown (model, FantasyCalc,
   DynastyProcess), projected points per game for three seasons, this season's scoring, a value
   trend, and a one-tap "build a trade" or "shop him" into the trade lab
-- **Managers, Moves, History:** league-mate profiles;
+- **Managers:** a scouting report for any manager: their plan and how active they are; how to
+  approach them (advice generated from their needs, plan and trade history); what they need
+  this season and next and what they'd move (from their team plan); how they trade (won-lost-even
+  at today's values, net and per-trade margin, pieces per deal, ages and positions they get vs
+  give, picks and firsts bought and sold, in-season vs offseason, record with each partner, best
+  and worst deals); track record (finishes, lineup efficiency vs the league); rookie drafts (what
+  their picks are worth now vs the league's picks in the same rounds); waivers. Buttons open the
+  trade lab with them, their past trades and their plan. A sortable table compares everyone.
+- **Moves, History:**
   recent transactions; seasons and champions (linked from League; tabs on PC)
 
 Works offline with the last data it loaded, follows your phone's light or dark mode, and the

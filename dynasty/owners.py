@@ -394,7 +394,7 @@ def build(store: Store) -> dict:
             tags.append("Sells picks")
         if p["acq_pos"]:
             top, cnt = p["acq_pos"].most_common(1)[0]
-            if cnt >= 2 and cnt / sum(p["acq_pos"].values()) >= 0.4:
+            if cnt >= 3 and cnt / sum(p["acq_pos"].values()) >= 0.5:
                 tags.append(f"Trades for {top}s")
         if uid in faab_rank[:3] and p["faab"] > 0:
             tags.append("Big FAAB spender")
