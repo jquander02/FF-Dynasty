@@ -87,8 +87,51 @@ class Phase4PipelineTest(Phase3PipelineTest):
         self.assertEqual(len(rows), 1)
         sides = {s["roster_id"]: s for s in json.loads(rows[0]["sides"])}
         self.assertEqual(sides[MY_ROSTER]["net"], -sides[7]["net"])
-        self.assertTrue(any("Justin Jefferson" in x for x in sides[MY_ROSTER]["received"]))
-        self.assertTrue(any("$50 FAAB" in x for x in sides[MY_ROSTER]["received"]))
+        mine = sides[MY_ROSTER]["got"]
+        self.assertTrue(any(a["k"] == "player" and a["name"] == "Justin Jefferson" for a in mine))
+        self.assertTrue(any(a["k"] == "faab" and a["amount"] == 50 for a in mine))
+        pick = [a for a in sides[7]["got"] if a["k"] == "pick"][0]
+        self.assertEqual((pick["season"], pick["round"], pick["status"]), ("2027", 1, "future"))
+        self.assertEqual(pick["orig"], MY_ROSTER)
+        self.assertGreater(pick["value"], 0)
+        self.assertIsNotNone(pick["exp_slot"])
+        # each asset points at the side that gave it up
+        idx = [s["roster_id"] for s in json.loads(rows[0]["sides"])]
+        self.assertEqual(idx[pick["from"]], MY_ROSTER)
+
+    def test_used_pick_becomes_player(self):
+        # an earlier trade sends the 2026 1st (original owner: my roster) to roster 7; the draft
+        # order puts that pick at 1.06, where my roster took player 9999
+        lid = self.q("SELECT league_id FROM league_season WHERE is_current=1")[0]["league_id"]
+        self.store.upsert("txn", [{"transaction_id": "t-old", "league_id": lid, "season": "2026", "week": 1,
+                                   "type": "trade", "status": "complete", "created": 1780000000000,
+                                   "status_updated": 1780000000000, "roster_ids": json.dumps([MY_ROSTER, 7])}])
+        self.store.upsert("txn_move", [
+            {"transaction_id": "t-old", "seq": 0, "kind": "pick", "roster_id": 7, "from_roster_id": MY_ROSTER,
+             "pick_season": "2026", "pick_round": 1, "pick_original_roster": MY_ROSTER},
+            {"transaction_id": "t-old", "seq": 1, "kind": "add", "roster_id": MY_ROSTER, "from_roster_id": 7,
+             "player_id": "6794"}])
+        self.store.commit()
+        log = owners.trade_log(self.store)
+        self.assertEqual([t["id"] for t in log], ["t-trade-1", "t-old"])   # newest first
+        old = log[1]
+        got7 = [s for s in old["sides"] if s["roster_id"] == 7][0]["got"][0]
+        self.assertEqual(got7["status"], "used")
+        self.assertEqual(got7["pick"], "1.06")
+        self.assertEqual(got7["became"]["id"], "9999")
+        self.assertEqual(got7["became"]["name"], "Rookie Unknown")
+        self.assertEqual(got7["value"], got7["became"]["value"])
+        # verdict fields and package math
+        for t in log:
+            nets = [s["net"] for s in t["sides"]]
+            self.assertEqual(sum(nets), 0)
+            if not t["even"]:
+                self.assertEqual(t["sides"][t["winner"]]["net"], max(nets))
+        # profiles count both trades and use the same nets
+        owners.build(self.store)
+        me = {r["user_id"]: r for r in self.q("SELECT * FROM owner_profile")}[ME]
+        self.assertEqual(me["trades"], 2)
+        self.assertEqual(me["trade_net"], sum(s["net"] for t in log for s in t["sides"] if s["roster_id"] == MY_ROSTER))
 
     def test_finder(self):
         # give roster 7 a young RB and a contending window so a deal exists
@@ -125,7 +168,9 @@ class Phase4PipelineTest(Phase3PipelineTest):
         self.assertTrue(any(x["get"] == ["7002"] for x in fj))
         oj = json.loads((d / "owners.json").read_text())
         self.assertEqual(len(oj["profiles"]), 12)
-        self.assertEqual(len(oj["trades"]), 1)
+        tj = json.loads((d / "trades.json").read_text())
+        self.assertEqual(len(tj), 1)
+        self.assertEqual({s["roster_id"] for s in tj[0]["sides"]}, {MY_ROSTER, 7})
         rj = json.loads((d / "rosters.json").read_text())
         cmc = [p for p in rj[str(MY_ROSTER)] if p["id"] == "4034"][0]
         self.assertIsNotNone(cmc["p0"])

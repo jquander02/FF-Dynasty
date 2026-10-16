@@ -377,3 +377,43 @@ table.mini tr:last-child td { border-bottom: 0; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- past trades ---------- */
+.tlist { display: grid; gap: 12px; margin-top: 12px; }
+.tcard { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-group); overflow: hidden; }
+.tcard > header {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 10px 14px; background: var(--surface-2); border-bottom: 1px solid var(--line); font-size: 13px;
+}
+.tcard > header b { font-size: 14px; }
+.verdict-chip { font: 800 15px/1.1 var(--display); letter-spacing: 0.02em; padding: 4px 8px 3px; border-radius: 6px; text-align: right; max-width: 55%; }
+.verdict-chip.won { color: var(--good); background: color-mix(in srgb, var(--good) 12%, transparent); }
+.verdict-chip.lost { color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); }
+.verdict-chip.even { color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, transparent); }
+.tsides { display: grid; grid-template-columns: minmax(0, 1fr); }
+.tside { padding: 10px 14px 12px; }
+.tside + .tside { border-top: 1px solid var(--line); }
+.tside.focus { box-shadow: inset 4px 0 0 var(--marker); }
+.tside h3 { margin: 0 0 2px; font-size: 14px; font-weight: 700; font-family: var(--body); letter-spacing: 0; }
+.tside h3 .muted { font-weight: 450; }
+.past-row {
+  display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 10px; align-items: start;
+  width: 100%; padding: 9px 0; border: 0; border-bottom: 1px solid var(--line); background: none;
+  font: inherit; color: inherit; text-align: left;
+}
+button.past-row { cursor: pointer; }
+button.past-row:focus-visible { outline: 2px solid var(--turf); outline-offset: 2px; border-radius: 6px; }
+.past-row > .dot { justify-self: start; margin-top: 2px; }
+.past-row .aname { display: block; }
+.past-row .meta { display: block; margin-top: 2px; }
+.past-row .aval { padding-top: 2px; }
+.slotno { font: 700 13px/1 var(--display); color: var(--muted); margin-left: 2px; }
+.became { display: block; margin-top: 4px; font-size: 13.5px; }
+.became b { font-weight: 700; }
+.became .dot { margin: 0 2px 0 3px; }
+.tsum { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding-top: 9px; font-size: 13px; color: var(--muted); }
+.tsum b { font: 800 20px/1 var(--display); }
+@media (min-width: 760px) {
+  .tsides { grid-template-columns: repeat(var(--n, 2), minmax(0, 1fr)); }
+  .tside + .tside { border-top: 0; border-left: 1px solid var(--line); }
+}

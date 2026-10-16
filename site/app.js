@@ -9,7 +9,7 @@
   const panel = sheet.querySelector(".sheet-panel");
   const POS_ORDER = ["QB", "RB", "WR", "TE", "K", "DEF"];
   const SKILLPOS = ["QB", "RB", "WR", "TE"];
-  const FILES = ["meta", "teams", "rosters", "picks", "activity", "history", "values", "plan", "owners", "finder"];
+  const FILES = ["meta", "teams", "rosters", "picks", "activity", "history", "values", "plan", "owners", "finder", "trades"];
 
   const state = {
     team: null,            // the team being viewed on Team / Plan, and "Team A" in the trade lab
@@ -17,6 +17,7 @@
     give: new Set(), get: new Set(),
     pickTeam: "all", valOwner: "all", valPos: "ALL", valQuery: "", valLimit: 100,
     valSort: "val", rosterSort: "val", pickSort: "slot",
+    histTeam: "all", histWith: "all", histSort: "new",
     sort: {},              // per-table column sort: id -> {key, dir}
     lastFocus: null,
   };
@@ -104,7 +105,7 @@
   // ---------------------------------------------------------------- building blocks
   const board = (items) => `
     <div class="board" style="--n:${items.length}">
-      ${items.map((i) => `<div class="${i.mark ? "you" : ""}"><b class="${String(i.v).replace(/&[lg]t;/g, "<").length > 5 || /[<>]|&[lg]t;/.test(String(i.v)) ? "long" : ""}">${i.v}</b><span>${i.l}</span></div>`).join("")}
+      ${items.map((i) => `<div class="${i.mark ? "you" : ""}"><b class="${String(i.v).replace(/&[lg]t;/g, "<").length > 5 || /[<>]|&[lg]t;/.test(String(i.v)) ? "long" : ""} ${i.cls || ""}">${i.v}</b><span>${i.l}</span></div>`).join("")}
     </div>`;
   const how = (title, paras) => `
     <details class="how"><summary>${esc(title)}</summary>${paras.map((p) => `<p>${p}</p>`).join("")}</details>`;
@@ -207,7 +208,7 @@
       <h2>Standings</h2>
       ${sortableTable("standings", cols, list, { key: "rank", dir: 1 }, (t) => (t.roster_id === state.team ? "me" : ""))}
       ${windowChart(list)}
-      <div class="links"><a href="#owners">Managers and past trades</a><a href="#activity">Recent moves</a><a href="#history">Champions</a></div>
+      <div class="links"><a href="#trades" data-hist="all">Past trades</a><a href="#owners">Managers</a><a href="#activity">Recent moves</a><a href="#history">Champions</a></div>
       ${how("How these numbers work", [
         `Tap a column heading to sort; tap it again to reverse. Playoff odds come from simulating the rest of the regular season 10,000 times on Sleeper's schedule. Value is the sum of a roster's player values.`,
         `Windows: each team's best possible lineup is projected for the rest of this season and the next two. <i>Dynasty power</i> is strong now and later, <i>Win now</i> is strong now only, <i>Rising</i> is stronger later, <i>Rebuild</i> is weak both ways.`,
@@ -287,7 +288,7 @@
         { v: t?.avg_age ?? "–", l: "Average age" },
         { v: `${taxi}/${D.meta?.settings?.taxi_slots ?? "–"}`, l: `Taxi spots used, ${under25} under 25` },
       ])}
-      ${t ? `<p class="note">${esc(t.team)}${userTag(t.owner)} ${winChip(t.window)}${t.window ? ":" : ""} lineup strength ranks ${ordinal(t.ranks?.[0])} now, ${ordinal(t.ranks?.[1])} next season and ${ordinal(t.ranks?.[2])} in two. <a href="#plan">See this team's plan</a>.</p>` : ""}
+      ${t ? `<p class="note">${esc(t.team)}${userTag(t.owner)} ${winChip(t.window)}${t.window ? ":" : ""} lineup strength ranks ${ordinal(t.ranks?.[0])} now, ${ordinal(t.ranks?.[1])} next season and ${ordinal(t.ranks?.[2])} in two. <a href="#plan">See this team's plan</a> or <a href="#trades" data-hist="${t.roster_id}">its past trades</a>.</p>` : ""}
       <div class="controls" style="margin-top:12px">${sortSelect("roster-sort", state.rosterSort, [["val", "Value"], ["age", "Age, youngest first"], ["ppg", "Points per game this season"], ["proj", "Projection next season"], ["name", "Name"]])}</div>
       <div class="cols">
       ${groups.map(([pos, list]) => `
@@ -565,7 +566,9 @@
         <div class="cols">
           <div><h2>About ${esc(A.team)}</h2>${profA ? profileCard(profA, true) : ""}</div>
           <div><h2>About ${esc(B.team)}</h2>${profB ? profileCard(profB, true) : ""}</div>
-        </div>` : A && state.give.size ? `<h2>${esc(A.team)} gives</h2><div class="group">${assetList(A.roster_id, state.give, "give")}</div>` : ""}
+        </div>
+        ${(() => { const n = (D.trades || []).filter((tr) => involves(tr, A.roster_id) && involves(tr, B.roster_id)).length;
+          return `<p class="note">${n ? `<a href="#trades" data-hist="${A.roster_id}" data-with="${B.roster_id}">See their ${plural(n, "past trade")} with each other</a>.` : "They haven't traded with each other before."}</p>`; })()}` : A && state.give.size ? `<h2>${esc(A.team)} gives</h2><div class="group">${assetList(A.roster_id, state.give, "give")}</div>` : ""}
       <h2>Suggested trades${A ? ` for ${esc(A.team)}` : ""}${B ? ` with ${esc(B.team)}` : ""}<span class="count">${sugg.length}</span></h2>
       <div class="group">${sugg.slice(0, A ? 8 : 15).map((f) => `
         <div class="sugg">
@@ -594,7 +597,7 @@
         ${compactCard ? "" : `<div class="entry-head"><b>${esc(p.team)}${userTag(p.owner)}</b>${winChip(p.window)}</div>`}
         ${(p.tags || []).length ? `<div class="tags">${p.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join("")}</div>` : ""}
         <dl class="facts">
-          <dt>Trades</dt><dd>${p.trades}${p.trades ? `, net <span class="${signCls(p.trade_net)}">${p.trade_net >= 0 ? "+" : ""}${fmt(p.trade_net)}</span> at today's values` : ""}</dd>
+          <dt>Trades</dt><dd>${p.trades}${p.trades ? `, net <span class="${signCls(p.trade_net)}">${p.trade_net >= 0 ? "+" : ""}${fmt(p.trade_net)}</span> at today's values. <a href="#trades" data-hist="${p.roster_id}">See them</a>` : ""}</dd>
           ${(p.partners || []).length ? `<dt>Trades with</dt><dd>${p.partners.map((x) => `${nameHTML(x.team)} (${x.n})`).join(", ")}</dd>` : ""}
           ${pos ? `<dt>Trades for</dt><dd>${pos}</dd>` : ""}
           <dt>Picks</dt><dd>${p.picks_in} acquired, ${p.picks_out} traded away</dd>
@@ -604,7 +607,7 @@
       </div>`;
   }
   function renderOwners() {
-    const O = D.owners || { profiles: [], trades: [] };
+    const O = D.owners || { profiles: [] };
     const cols = [
       { key: "team", label: "Team", value: (p) => (p.team || "").toLowerCase(),
         html: (p) => `<span class="tname">${esc(p.team)}</span><span class="sub2"><span class="user">@${esc(p.owner)}</span>${winChip(p.window)}</span>` },
@@ -619,14 +622,138 @@
       <h2>Managers<span class="count">${O.profiles.length}</span></h2>
       ${sortableTable("owners", cols, O.profiles, { key: "trades", dir: -1 }, (p) => (p.roster_id === state.team ? "me" : ""))}
       <div class="cols" style="margin-top:12px">${O.profiles.map((p) => profileCard(p)).join("")}</div>
-      <h2>Past trades at today's values<span class="count">${O.trades.length}</span></h2>
-      <div class="group">${O.trades.map((t) => `
-        <div class="entry">
-          <div class="entry-head"><b>${t.season}${t.week ? `, week ${t.week}` : ""}</b></div>
-          ${t.sides.map((sd) => `<div class="move"><b>${esc(sd.team || "?")}</b>${userTag(sd.owner || byTeamName[(sd.team || "").trim()]?.owner)} got ${sd.received.map(esc).join(", ") || "nothing"} <span class="${signCls(sd.net)}">${sd.net > 0 ? "+" : ""}${fmt(sd.net)}</span></div>`).join("")}
-        </div>`).join("") || `<div class="empty">No trades yet.</div>`}</div>
+      <p class="note" style="margin-top:12px"><a href="#trades" data-hist="all">Every past trade, judged at today's values</a></p>
       ${how("How profiles are built", [
-        `From every trade, waiver claim and draft in this league's history, plus each manager's early-round picks in their other Sleeper leagues. Trade results use what each side holds today at today's values, with used draft picks counted as the player taken. Tap a column heading to sort.`,
+        `From every trade, waiver claim and draft in this league's history, plus each manager's early-round picks in their other Sleeper leagues. Net is the total of every trade's result at today's values (see Past trades), with used draft picks counted as the player taken. Tap a column heading to sort.`,
+      ])}`;
+  }
+
+  // ---------------------------------------------------------------- Past trades
+  const involves = (tr, rid) => tr.sides.some((sd) => sd.roster_id === rid);
+  const sideOf = (tr, rid) => tr.sides.findIndex((sd) => sd.roster_id === rid);
+  const sideName = (sd) => (sd.roster_id != null ? teamHTML(sd.roster_id) : `${esc(sd.team)}${userTag(sd.owner)} <span class="muted">(left the league)</span>`);
+  const tradeDate = (tr) => (tr.ts ? new Date(tr.ts).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "");
+  const signed = (x) => `${x > 0 ? "+" : x < 0 ? "−" : ""}${fmt(Math.abs(x))}`;
+  // from one team's point of view: 1 won, -1 lost, 0 even
+  const outcome = (tr, i) => (tr.even ? 0 : tr.sides[i].net > 0 ? 1 : -1);
+
+  function whereNow(rid, receiver) {
+    if (rid == null) return "free agent now";
+    if (rid === receiver && receiver != null) return "still on the roster";
+    return `now on ${teamHTML(rid)}`;
+  }
+  function pastAsset(a, receiver) {
+    const clickable = (id) => (byId[id] ? `data-player="${esc(id)}"` : "");
+    if (a.k === "faab") {
+      return `<div class="past-row"><span class="dot PK">$</span><span><span class="aname">$${fmt(a.amount)} FAAB</span><span class="meta"><span>not counted in value</span></span></span><span class="aval muted">–</span></div>`;
+    }
+    if (a.k === "player") {
+      const tag = byId[a.id] ? "button" : "div";
+      return `<${tag} class="past-row" ${tag === "button" ? `type="button" ${clickable(a.id)}` : ""}>
+        <span class="dot ${esc(a.pos || "")}">${esc(a.pos || "?")}</span>
+        <span><span class="aname">${esc(a.name)}</span><span class="meta"><span>${whereNow(a.now_on, receiver)}</span></span></span>
+        <span class="aval">${fmt(a.value)}</span></${tag}>`;
+    }
+    const owner = a.orig_team ? `${esc(a.orig_team)}'s` : "";
+    const head = `${a.season} round ${a.round}${a.status === "used" ? ` <span class="slotno">${esc(a.pick)}</span>` : ""}`;
+    if (a.status === "used") {
+      const b = a.became || {};
+      const tag = byId[b.id] ? "button" : "div";
+      return `<${tag} class="past-row pick" ${tag === "button" ? `type="button" ${clickable(b.id)}` : ""}>
+        <span class="dot PK">PK</span>
+        <span><span class="aname">${head}</span><span class="meta"><span>${owner} pick</span></span>
+          <span class="became">Became <b>${esc(b.name || "?")}</b>${b.pos ? ` <span class="dot ${esc(b.pos)}">${esc(b.pos)}</span>` : ""} <span class="muted">${whereNow(b.now_on, receiver)}</span></span></span>
+        <span class="aval">${fmt(a.value)}</span></${tag}>`;
+    }
+    const meta = a.status === "future"
+      ? `${owner} pick, not drafted yet${a.exp_slot ? `, projected ${slotLabel(a.round, a.exp_slot)}` : ""}`
+      : `${owner} pick, player taken not found`;
+    return `<div class="past-row pick"><span class="dot PK">PK</span>
+      <span><span class="aname">${head}</span><span class="meta"><span>${meta}</span></span></span>
+      <span class="aval">${a.status === "future" ? fmt(a.value) : "–"}</span></div>`;
+  }
+  function tradeCard(tr, focus) {
+    const fi = focus != null ? sideOf(tr, focus) : -1;
+    const order = tr.sides.map((_, i) => i).sort((a, b) => (b === fi) - (a === fi));
+    let verdict;
+    if (fi >= 0) {
+      const o = outcome(tr, fi), m = tr.sides[fi].net;
+      verdict = o === 0 ? `<span class="verdict-chip even">Even</span>`
+        : `<span class="verdict-chip ${o > 0 ? "won" : "lost"}">${o > 0 ? "Won" : "Lost"} by ${fmt(Math.abs(m))}</span>`;
+    } else {
+      verdict = tr.even ? `<span class="verdict-chip even">Even</span>`
+        : `<span class="verdict-chip won">${esc(tr.sides[tr.winner]?.team || "")} won by ${fmt(tr.margin)}</span>`;
+    }
+    return `
+      <article class="tcard">
+        <header><span><b>${tr.season}${tr.week ? `, week ${tr.week}` : ""}</b> <span class="muted">${tradeDate(tr)}</span></span>${verdict}</header>
+        <div class="tsides" style="--n:${tr.sides.length}">
+          ${order.map((i) => {
+            const sd = tr.sides[i];
+            return `<section class="tside ${i === fi ? "focus" : ""}">
+              <h3>${sideName(sd)} <span class="muted">got</span></h3>
+              ${sd.got.map((a) => pastAsset(a, sd.roster_id)).join("") || `<p class="note">Nothing</p>`}
+              <div class="tsum"><span>Worth ${fmt(sd.got_value)} today${sd.got.filter((a) => a.k !== "faab").length > 1 ? ` <span class="muted">(${fmt(sd.got_raw)} before the package discount)</span>` : ""}</span>
+                <b class="${signCls(sd.net)}">${signed(sd.net)}</b></div>
+            </section>`;
+          }).join("")}
+        </div>
+      </article>`;
+  }
+  function renderPastTrades() {
+    const all = D.trades || [];
+    const tid = state.histTeam === "all" ? null : Number(state.histTeam);
+    const wid = tid == null || state.histWith === "all" ? null : Number(state.histWith);
+    let list = all;
+    if (tid != null) list = list.filter((tr) => involves(tr, tid));
+    if (wid != null) list = list.filter((tr) => involves(tr, wid));
+    const net = (tr) => (tid != null ? tr.sides[sideOf(tr, tid)].net : Math.abs(tr.margin));
+    const sorters = {
+      new: (a, b) => (b.ts || 0) - (a.ts || 0),
+      old: (a, b) => (a.ts || 0) - (b.ts || 0),
+      swing: (a, b) => Math.abs(b.margin) - Math.abs(a.margin),
+      best: (a, b) => net(b) - net(a),
+      worst: (a, b) => net(a) - net(b),
+    };
+    const sortOpts = tid != null
+      ? [["new", "Newest first"], ["old", "Oldest first"], ["best", "Best for this team"], ["worst", "Worst for this team"], ["swing", "Most lopsided"]]
+      : [["new", "Newest first"], ["old", "Oldest first"], ["swing", "Most lopsided"]];
+    if (!sortOpts.some(([k]) => k === state.histSort)) state.histSort = "new";
+    list = [...list].sort(sorters[state.histSort]);
+
+    let summary;
+    if (tid != null) {
+      const res = list.map((tr) => outcome(tr, sideOf(tr, tid)));
+      const total = list.reduce((x, tr) => x + tr.sides[sideOf(tr, tid)].net, 0);
+      const picksIn = list.reduce((x, tr) => x + tr.sides[sideOf(tr, tid)].got.filter((a) => a.k === "pick").length, 0);
+      const picksOut = list.reduce((x, tr) => x + tr.sides.reduce((y, sd) => y + sd.got.filter((a) => a.k === "pick" && a.from === sideOf(tr, tid)).length, 0), 0);
+      summary = board([
+        { v: list.length, l: plural(list.length, "trade").replace(/^\d+ /, "") + (wid != null ? ` with ${esc(teamOf(wid)?.team || "")}` : ""), mark: true },
+        { v: `${res.filter((x) => x > 0).length}–${res.filter((x) => x < 0).length}–${res.filter((x) => x === 0).length}`, l: "Won, lost, even" },
+        { v: `${total > 0 ? "+" : total < 0 ? "−" : ""}${Math.abs(total) >= 1000 ? `${(Math.abs(total) / 1000).toFixed(1)}k` : fmt(Math.abs(total))}`, cls: signCls(total), l: "Net value today" },
+        { v: `${picksIn}/${picksOut}`, l: "Picks got, picks given" },
+      ]);
+    } else {
+      const evenN = list.filter((tr) => tr.even).length;
+      const usedPicks = list.reduce((x, tr) => x + tr.sides.reduce((y, sd) => y + sd.got.filter((a) => a.k === "pick" && a.status === "used").length, 0), 0);
+      summary = board([
+        { v: list.length, l: "Trades in league history" },
+        { v: pct(list.length ? evenN / list.length : null), l: "Even at today's values" },
+        { v: usedPicks, l: "Traded picks already used" },
+      ]);
+    }
+    return `
+      <div class="controls">
+        <select id="hist-team" aria-label="Team"><option value="all" ${tid == null ? "selected" : ""}>All teams</option>${teamOptions(tid)}</select>
+        ${tid != null ? `<select id="hist-with" aria-label="Trades with"><option value="all" ${wid == null ? "selected" : ""}>With any team</option>${teams().filter((t) => t.roster_id !== tid).sort((a, b) => a.team.localeCompare(b.team)).map((t) => `<option value="${t.roster_id}" ${t.roster_id === wid ? "selected" : ""}>With ${esc(teamText(t.roster_id))}</option>`).join("")}</select>` : ""}
+        ${sortSelect("hist-sort", state.histSort, sortOpts)}
+      </div>
+      ${summary}
+      <div class="tlist">${list.map((tr) => tradeCard(tr, tid)).join("") || `<div class="empty"><b>No trades</b>${tid != null ? "This team hasn't made a trade" : "No trades yet"}${wid != null ? " with that team" : ""}.</div>`}</div>
+      ${how("How past trades are judged", [
+        `Everything is valued at today's values, not what it was worth on the day. Players count at their current value wherever they are now. A draft pick that has been used counts as the player taken with it; a pick not yet used counts at its pick value and projected slot.`,
+        `Each side's haul is combined the same way as in the trade lab: two equal pieces count as about 1.7 of one, because only so many players start. The number on each side is what it got minus what it gave. A trade is even when every side is within 10%.`,
+        `FAAB moved in a trade is shown but not valued. Tap a player to see his value breakdown.`,
       ])}`;
   }
 
@@ -714,8 +841,8 @@
   }
 
   // ---------------------------------------------------------------- router
-  const TABS = { league: renderLeague, team: renderTeam, values: renderValues, picks: renderPicks, plan: renderPlan, trade: renderTrade, owners: renderOwners, activity: renderActivity, history: renderHistory };
-  const TITLES = { league: "League", team: "Team", values: "Values", picks: "Picks", plan: "Plan", trade: "Trade", owners: "Managers", activity: "Moves", history: "History" };
+  const TABS = { league: renderLeague, team: renderTeam, values: renderValues, picks: renderPicks, plan: renderPlan, trade: renderTrade, trades: renderPastTrades, owners: renderOwners, activity: renderActivity, history: renderHistory };
+  const TITLES = { league: "League", team: "Team", values: "Values", picks: "Picks", plan: "Plan", trade: "Trade", trades: "Past trades", owners: "Managers", activity: "Moves", history: "History" };
   const FIRST_DIR = { rank: 1, team: 1, age: 1, champ: 1 };   // first tap: ascending for these, descending otherwise
   function route(keepScroll = false) {
     const y = window.scrollY;
@@ -765,6 +892,8 @@
       closeSheet(); location.hash = "#trade"; route();
       return;
     }
+    const hl = t.closest("[data-hist]");
+    if (hl) { state.histTeam = hl.dataset.hist; state.histWith = hl.dataset.with || "all"; if (location.hash === "#trades") route(); }
     const r = t.closest("[data-roster]");
     if (r) { setTeam(Number(r.dataset.roster)); }
     const vp = t.closest("[data-vp]");
@@ -806,6 +935,9 @@
       case "team-pick": setTeam(num); rerender(); break;
       case "pick-team": state.pickTeam = t.value; rerender(); break;
       case "pick-sort": state.pickSort = t.value; rerender(); break;
+      case "hist-team": state.histTeam = t.value; state.histWith = "all"; rerender(); break;
+      case "hist-with": state.histWith = t.value; rerender(); break;
+      case "hist-sort": state.histSort = t.value; rerender(); break;
       case "roster-sort": state.rosterSort = t.value; rerender(); break;
       case "val-owner": state.valOwner = t.value; state.valLimit = 100; refreshValues(); break;
       case "val-sort": state.valSort = t.value; state.valLimit = 100; refreshValues(); break;

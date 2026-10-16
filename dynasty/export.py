@@ -296,17 +296,21 @@ def run(store: Store, site_dir: Path) -> dict[str, int]:
     _write(out, "plan.json", {str(k): v for k, v in plans.items()})
 
     # ---- owners + trades (phase 4) ---------------------------------------------
-    owners_out = {"profiles": [], "trades": []}
+    owners_out = {"profiles": []}
     if _table(store, "owner_profile"):
         for r in store.query("SELECT * FROM owner_profile ORDER BY trades DESC"):
             d = dict(r)
             for k in ("partners", "acquired_positions", "rookie_early", "draft_mix_other_leagues", "tags"):
                 d[k] = json.loads(d[k] or "null")
             owners_out["profiles"].append(d)
+    # every past trade, valued today, used picks resolved to the player taken (Past trades view)
+    trades = []
     if _table(store, "trade_review"):
-        for r in store.query("SELECT * FROM trade_review ORDER BY ts DESC LIMIT 60"):
-            owners_out["trades"].append({"season": r["season"], "week": r["week"], "ts": r["ts"],
-                                         "sides": json.loads(r["sides"] or "[]")})
+        for r in store.query("SELECT * FROM trade_review ORDER BY ts DESC"):
+            trades.append({"id": r["transaction_id"], "season": r["season"], "week": r["week"], "ts": r["ts"],
+                           "even": bool(r["even"]), "winner": r["winner"], "margin": r["margin"],
+                           "sides": json.loads(r["sides"] or "[]")})
+    _write(out, "trades.json", trades)
     _write(out, "owners.json", owners_out)
     finder = []
     if _table(store, "trade_suggestion"):
