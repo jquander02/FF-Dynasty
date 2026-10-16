@@ -180,6 +180,11 @@ def fit_draft_prior(picks: list[dict], seasons: list[dict], current: int) -> dic
             if s >= current:
                 continue
             acc[(pos, b, n)].append(pts.get((p["gsis_id"], s), 0.0) / 17.0)
+    # Pooled trajectory over picks 1-100 per position: a stable year 1 -> 3 growth curve
+    # (single buckets like first-round TEs have too few players to trust their shape).
+    for (pos, b, n), v in list(acc.items()):
+        if b in ("1-12", "13-32", "33-64", "65-100"):
+            acc.setdefault((pos, "POOLED", n), []).extend(v)
     prior = {}
     for k, v in acc.items():
         if len(v) >= 3:
@@ -383,11 +388,12 @@ def build(store: Store, cfg: ModelConfig | None = None) -> dict:
 
         def growth(n_from: int, n_to: int) -> float:
             """Typical PPG change for this draft range between NFL years (years 1-3 only)."""
-            a = prior.get((pos, bucket, min(max(n_from, 1), 3)))
-            b = prior.get((pos, bucket, min(max(n_to, 1), 3)))
+            key = "POOLED" if (pos, "POOLED", 1) in prior else bucket
+            a = prior.get((pos, key, min(max(n_from, 1), 3)))
+            b = prior.get((pos, key, min(max(n_to, 1), 3)))
             if not a or not b or a < 0.5:
                 return 1.0
-            return min(max(b / a, 0.8), 2.5)
+            return min(max(b / a, 0.8), 1.8)
 
         def at(season_offset: int) -> float:
             # Early career: follow the draft class's year-1 -> year-3 trajectory instead of

@@ -229,12 +229,12 @@ class ValuePipelineTest(unittest.TestCase):
         self.assertLess(p["4034"]["ppg_y3"], p["4034"]["ppg_y1"])
         self.assertGreater(p["6794"]["model_value"], 0)
         # rookie with no stats gets the draft prior through FantasyCalc's draft info,
-        # and follows the draft class's year 1 -> 3 growth (6 -> 10 -> 12 PPG)
+        # and follows the draft class's year 1 -> 3 growth (6 -> 10 -> 12 PPG, capped at 1.8x)
         r = p["9999"]
         self.assertEqual(r["draft_bucket"], "1-12")
         self.assertAlmostEqual(r["talent_ppg"], 6.0, places=1)
         self.assertAlmostEqual(r["ppg_y1"], 10.0, places=1)
-        self.assertAlmostEqual(r["ppg_y2"], 12.0, places=1)
+        self.assertAlmostEqual(r["ppg_y2"], 10.8, places=1)
         self.assertLess(r["ppg_y3"], r["ppg_y2"] * 1.2)  # then the age curve takes over
         self.assertEqual(self.model["starters_counted"]["QB"], 12)
         self.assertTrue(self.q("SELECT COUNT(*) c FROM age_curve")[0]["c"] > 40)
