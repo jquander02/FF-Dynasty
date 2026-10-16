@@ -654,7 +654,7 @@
         <span><span class="aname">${esc(a.name)}</span><span class="meta"><span>${whereNow(a.now_on, receiver)}</span></span></span>
         <span class="aval">${fmt(a.value)}</span></${tag}>`;
     }
-    const owner = a.orig_team ? `${esc(a.orig_team)}'s` : "";
+    const owner = a.orig_team ? `${esc(a.orig_team)}${/s$/i.test(a.orig_team) ? "'" : "'s"}` : "";
     const head = `${a.season} round ${a.round}${a.status === "used" ? ` <span class="slotno">${esc(a.pick)}</span>` : ""}`;
     if (a.status === "used") {
       const b = a.became || {};
@@ -729,8 +729,8 @@
       const picksOut = list.reduce((x, tr) => x + tr.sides.reduce((y, sd) => y + sd.got.filter((a) => a.k === "pick" && a.from === sideOf(tr, tid)).length, 0), 0);
       summary = board([
         { v: list.length, l: plural(list.length, "trade").replace(/^\d+ /, "") + (wid != null ? ` with ${esc(teamOf(wid)?.team || "")}` : ""), mark: true },
-        { v: `${res.filter((x) => x > 0).length}–${res.filter((x) => x < 0).length}–${res.filter((x) => x === 0).length}`, l: "Won, lost, even" },
-        { v: `${total > 0 ? "+" : total < 0 ? "−" : ""}${Math.abs(total) >= 1000 ? `${(Math.abs(total) / 1000).toFixed(1)}k` : fmt(Math.abs(total))}`, cls: signCls(total), l: "Net value today" },
+        { v: `${res.filter((x) => x > 0).length}–${res.filter((x) => x < 0).length}–${res.filter((x) => x === 0).length}`, cls: "long", l: "Won, lost, even" },
+        { v: `${total > 0 ? "+" : total < 0 ? "−" : ""}${Math.abs(total) >= 1000 ? `${(Math.abs(total) / 1000).toFixed(1)}k` : fmt(Math.abs(total))}`, cls: `${signCls(total)} long`, l: "Net value today" },
         { v: `${picksIn}/${picksOut}`, l: "Picks got, picks given" },
       ]);
     } else {
