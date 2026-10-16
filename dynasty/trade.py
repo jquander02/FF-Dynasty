@@ -11,9 +11,10 @@ evaluate() scores a deal for both sides:
   verdict   fair within 10% of the larger side's adjusted value
 
 find_trades() searches deals for your team: 1-for-1 and 2-for-1 (you give two) between
-your players and each other team's players and picks, keeping fair deals where the
-partner's lineup improves now if they're contending, and ranks them by how much they
-move your team toward its window (value now + strength in the next two seasons).
+your players and each other team's players and picks. It keeps deals that are fair (within
+10%) and that help the partner's window: buyers (contenders or 40%+ playoff odds) must get
+better now, everyone else must get better over the next two seasons. Ranked by how much
+they move your team toward its window, plus how much they help the partner.
 
 Writes trade_suggestion.
 """
@@ -49,6 +50,7 @@ class Ctx:
     rosters: dict = field(default_factory=dict)     # rid -> [pid]
     picks: dict = field(default_factory=dict)       # key "2027-1-4" -> {owner, value, label}
     windows: dict = field(default_factory=dict)     # rid -> window label
+    p_playoffs: dict = field(default_factory=dict)  # rid -> playoff odds this season
     names: dict = field(default_factory=dict)       # rid -> team name
 
 
@@ -80,6 +82,9 @@ def load(store: Store) -> Ctx:
                           "exp_slot": r["exp_slot"]}
     for r in store.query("SELECT roster_id, window FROM team_window"):
         ctx.windows[r["roster_id"]] = r["window"]
+    if store.query("SELECT 1 FROM sqlite_master WHERE name='season_sim'"):
+        for r in store.query("SELECT roster_id, p_playoffs FROM season_sim"):
+            ctx.p_playoffs[r["roster_id"]] = r["p_playoffs"] or 0.0
     for r in store.query(
         """SELECT r.roster_id, COALESCE(m.team_name, o.display_name) n FROM roster r
            LEFT JOIN owner o ON o.user_id=r.owner_id
@@ -145,7 +150,8 @@ def find_trades(store: Store, me: int, max_per_team: int = 3, total: int = 20) -
     for rid, pids in ctx.rosters.items():
         if rid == me:
             continue
-        contending = ctx.windows.get(rid) in CONTEND
+        # buyers: contenders and anyone with 40%+ playoff odds; everyone else is building
+        contending = ctx.windows.get(rid) in CONTEND or ctx.p_playoffs.get(rid, 0.0) >= 0.4
         theirs = [p for p in pids if ctx.players[p]["val"] >= 400]
         theirs += [k for k, pk in ctx.picks.items() if pk["owner"] == rid and pk["value"] >= 400]
         found = []
@@ -158,13 +164,17 @@ def find_trades(store: Store, me: int, max_per_team: int = 3, total: int = 20) -
                 if rebuilding and get not in ctx.picks and (ctx.players[get]["age"] or 99) > 25.5:
                     continue  # a rebuilding team wants youth or picks back
                 ev = evaluate(ctx, me, rid, list(give), [get], base)
-                if ev["verdict"] == "b_wins":
-                    continue
+                if ev["verdict"] != "fair":
+                    continue  # lopsided offers rarely get accepted
                 their_now = ev["b_delta"][0]
+                their_future = (ev["b_delta"][1] + ev["b_delta"][2]) / 2
                 if contending and their_now <= 0.3:
-                    continue  # a contender only bites if it helps now
+                    continue  # a buyer only bites if it helps now
+                if not contending and their_future <= 0.3:
+                    continue  # a builder only bites if it helps the next two seasons
                 my_future = (ev["a_delta"][1] + ev["a_delta"][2]) / 2
-                score = ev["a_net"] / 100 + (my_future if rebuilding else ev["a_delta"][0]) * 10 + max(their_now, 0) * 5
+                their_gain = their_now if contending else their_future
+                score = ev["a_net"] / 100 + (my_future if rebuilding else ev["a_delta"][0]) * 10 + their_gain * 5
                 found.append({
                     "partner": rid, "partner_team": ctx.names.get(rid), "partner_window": ctx.windows.get(rid),
                     "give": list(give), "get": [get], **ev, "score": round(score, 1),
@@ -181,6 +191,8 @@ def find_trades(store: Store, me: int, max_per_team: int = 3, total: int = 20) -
         out += kept
     out.sort(key=lambda x: -x["score"])
     out = out[:total]
+    for f in out:
+        f["partner_buying"] = ctx.windows.get(f["partner"]) in CONTEND or ctx.p_playoffs.get(f["partner"], 0.0) >= 0.4
 
     def label(a):
         if a in ctx.picks:
@@ -199,7 +211,7 @@ def find_trades(store: Store, me: int, max_per_team: int = 3, total: int = 20) -
             "get_label": " + ".join(label(a) for a in f["get"]),
             "give_value": f["a_gives_adj"], "get_value": f["b_gives_adj"],
             "my_delta": json.dumps(f["a_delta"]), "their_delta": json.dumps(f["b_delta"]),
-            "score": f["score"],
+            "score": f["score"], "partner_buying": int(f["partner_buying"]),
         })
     store.write_frame("trade_suggestion", rows) if rows else store.conn.execute("DROP TABLE IF EXISTS trade_suggestion")
     store.commit()

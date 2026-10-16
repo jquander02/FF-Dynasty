@@ -374,10 +374,10 @@
       const verdict = ev.verdict === "fair" ? `<span class="badge buy">FAIR</span>` :
         ev.verdict === "win" ? `<span class="badge buy">YOU WIN BY ${fmt(ev.diff)}</span>` :
         `<span class="badge sell">THEY WIN BY ${fmt(-ev.diff)}</span>`;
-      const contending = ["Dynasty power", "Win now"].includes(partner.window);
+      const contending = ["Dynasty power", "Win now"].includes(partner.window) || (partner.p_playoffs || 0) >= 0.4;
       const note = contending
-        ? (ev.them[0] > 0.3 ? `They're ${partner.window.toLowerCase()} and their lineup gets better now (${sgn(ev.them[0])} ppg): a deal they can say yes to.`
-                            : `They're ${partner.window.toLowerCase()}, but this doesn't help their lineup now: a hard sell.`)
+        ? (ev.them[0] > 0.3 ? `They're in the hunt (${pct(partner.p_playoffs)} playoff odds) and their lineup gets better now (${sgn(ev.them[0])} ppg): a deal they can say yes to.`
+                            : `They're in the hunt (${pct(partner.p_playoffs)} playoff odds), but this doesn't help their lineup now: a hard sell.`)
         : (ev.them[2] > 0.3 ? `They're ${(partner.window || "").toLowerCase()} and gain long-term (${sgn(ev.them[2])} ppg in 2 yrs).` : `Little in it for their window (${esc(partner.window || "?")}).`);
       result = `
         <div class="card result">
@@ -412,7 +412,7 @@
           <div class="pmeta">${partner ? "" : `${esc(f.partner_team)} (${esc(f.partner_window || "")}) · `}${fmt(f.give_value)} for ${fmt(f.get_value)} · you ${sgn(+(((f.my_delta[1] + f.my_delta[2]) / 2).toFixed(1)))} ppg later, them ${sgn(f.their_delta[0])} now</div></div>
           <button class="more small" data-load="${f.rank}">Try it</button>
         </div>`).join("") || `<p class="muted">No suggestions for this team.</p>`}</div>
-      <p class="foot">Values: 2-for-1 packages count less than their sum (two equal pieces ≈ 1.7× one), since only so many players start. Fair = within 10%. Lineup PPG is the best possible starting lineup before vs after. Suggestions are fair deals that help your window and, for contenders, help their lineup now.</p>`;
+      <p class="foot">Values: 2-for-1 packages count less than their sum (two equal pieces ≈ 1.7× one), since only so many players start. Fair = within 10%. Lineup PPG is the best possible starting lineup before vs after. Suggestions are fair deals that help your window and the partner's: teams in the playoff hunt get better now, everyone else over the next two seasons.</p>`;
   }
 
   // ---------------------------------------------------------------- Owners
