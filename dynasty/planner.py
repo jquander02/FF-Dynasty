@@ -1,4 +1,4 @@
-"""Rebuild planner for your roster.
+"""Team planner (any team; the app shows every team's).
 
   Tank tracker  your record, projected wins, odds of the 1.01 and a top-3 pick, and the
                 expected slot of every pick you own
@@ -22,15 +22,25 @@ CONTEND = ("Dynasty power", "Win now")
 SLOT_POS = {"QB": ("QB",), "RB": ("RB", "FLEX"), "WR": ("WR", "FLEX"), "TE": ("TE", "FLEX")}
 
 
-def build(store: Store) -> dict:
-    me = store.query("SELECT user_id FROM owner WHERE is_me=1")
+def build_all(store: Store) -> dict:
+    """A plan for every team, keyed by roster id."""
+    lg = store.query("SELECT league_id FROM league_season WHERE is_current=1")[0]
+    rids = [r["roster_id"] for r in store.query("SELECT roster_id FROM roster WHERE league_id=? ORDER BY roster_id",
+                                                (lg["league_id"],))]
+    return {rid: build(store, rid) for rid in rids}
+
+
+def build(store: Store, roster_id: int | None = None) -> dict:
+    """Plan for one team (defaults to the configured user's team)."""
     lg = store.query("SELECT * FROM league_season WHERE is_current=1")[0]
     lid = lg["league_id"]
-    mine = None
-    if me:
-        r = store.query("SELECT roster_id FROM roster WHERE league_id=? AND (owner_id=? OR co_owners LIKE ?)",
-                        (lid, me[0]["user_id"], f'%"{me[0]["user_id"]}"%'))
-        mine = r[0]["roster_id"] if r else None
+    mine = roster_id
+    if mine is None:
+        me = store.query("SELECT user_id FROM owner WHERE is_me=1")
+        if me:
+            r = store.query("SELECT roster_id FROM roster WHERE league_id=? AND (owner_id=? OR co_owners LIKE ?)",
+                            (lid, me[0]["user_id"], f'%"{me[0]["user_id"]}"%'))
+            mine = r[0]["roster_id"] if r else None
     if mine is None:
         return {}
 

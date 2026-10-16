@@ -292,8 +292,8 @@ def run(store: Store, site_dir: Path) -> dict[str, int]:
                  if len(hist_dates) > 1 else [],
         })
     _write(out, "values.json", value_list)
-    plan = planner.build(store) if _table(store, "pick_value") else {}
-    _write(out, "plan.json", plan)
+    plans = planner.build_all(store) if _table(store, "pick_value") else {}
+    _write(out, "plan.json", {str(k): v for k, v in plans.items()})
 
     # ---- owners + trades (phase 4) ---------------------------------------------
     owners_out = {"profiles": [], "trades": []}
@@ -310,7 +310,7 @@ def run(store: Store, site_dir: Path) -> dict[str, int]:
     _write(out, "owners.json", owners_out)
     finder = []
     if _table(store, "trade_suggestion"):
-        for r in store.query("SELECT * FROM trade_suggestion ORDER BY rank"):
+        for r in store.query("SELECT * FROM trade_suggestion ORDER BY team, rank"):
             d = dict(r)
             for k in ("give", "get", "my_delta", "their_delta"):
                 d[k] = json.loads(d[k] or "[]")

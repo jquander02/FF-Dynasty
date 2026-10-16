@@ -10,7 +10,7 @@ evaluate() scores a deal for both sides:
             this season (injured players left out), next season and two seasons out
   verdict   fair within 10% of the larger side's adjusted value
 
-find_trades() searches deals for your team: 1-for-1 and 2-for-1 (you give two) between
+find_trades() searches deals for one team (find_trades_all() runs it for every team): 1-for-1 and 2-for-1 (you give two) between
 your players and each other team's players and picks. It keeps deals that are fair (within
 10%) and that help the partner's window: buyers (contenders or 40%+ playoff odds) must get
 better now, everyone else must get better over the next two seasons. Ranked by how much
@@ -138,9 +138,11 @@ def evaluate(ctx: Ctx, team_a: int, team_b: int, a_gives: list[str], b_gives: li
     }
 
 
-def find_trades(store: Store, me: int, max_per_team: int = 3, total: int = 20) -> list[dict]:
-    ctx = load(store)
-    base = {rid: strengths(ctx, pids) for rid, pids in ctx.rosters.items()}
+def find_trades(store: Store, me: int, max_per_team: int = 3, total: int = 20,
+                ctx: Ctx | None = None, base: dict | None = None, write: bool = True) -> list[dict]:
+    """Suggested trades from team `me`'s point of view (it gives, the partner gives back)."""
+    ctx = ctx or load(store)
+    base = base or {rid: strengths(ctx, pids) for rid, pids in ctx.rosters.items()}
     mine = [p for p in ctx.rosters.get(me, []) if ctx.players[p]["val"] >= 400 and ctx.players[p]["p1"] is not None]
     my_window = ctx.windows.get(me)
     rebuilding = my_window in ("Rebuild", "Rising", "Middle")
@@ -204,6 +206,7 @@ def find_trades(store: Store, me: int, max_per_team: int = 3, total: int = 20) -
     rows = []
     for i, f in enumerate(out, 1):
         rows.append({
+            "id": f"{me}-{i}", "team": me, "team_name": ctx.names.get(me), "team_window": ctx.windows.get(me),
             "rank": i, "partner": f["partner"], "partner_team": f["partner_team"],
             "partner_window": f["partner_window"],
             "give": json.dumps(f["give"]), "get": json.dumps(f["get"]),
@@ -213,6 +216,24 @@ def find_trades(store: Store, me: int, max_per_team: int = 3, total: int = 20) -
             "my_delta": json.dumps(f["a_delta"]), "their_delta": json.dumps(f["b_delta"]),
             "score": f["score"], "partner_buying": int(f["partner_buying"]),
         })
-    store.write_frame("trade_suggestion", rows) if rows else store.conn.execute("DROP TABLE IF EXISTS trade_suggestion")
-    store.commit()
+    if write:
+        _write(store, rows)
     return rows
+
+
+def find_trades_all(store: Store, max_per_team: int = 3, total: int = 15) -> list[dict]:
+    """Suggestions for every team in the league (the app is neutral: any team's view)."""
+    ctx = load(store)
+    base = {rid: strengths(ctx, pids) for rid, pids in ctx.rosters.items()}
+    rows = []
+    for rid in sorted(ctx.rosters):
+        rows += find_trades(store, rid, max_per_team, total, ctx=ctx, base=base, write=False)
+    _write(store, rows)
+    return rows
+
+
+def _write(store: Store, rows: list[dict]) -> None:
+    store.conn.execute("DROP TABLE IF EXISTS trade_suggestion")
+    if rows:
+        store.write_frame("trade_suggestion", rows)
+    store.commit()

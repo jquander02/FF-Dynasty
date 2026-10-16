@@ -131,7 +131,9 @@ class Phase3PipelineTest(ValuePipelineTest):
         site = self.tmp / "site"
         export.run(self.store, site)
         d = site / "data"
-        self.assertEqual(json.loads((d / "plan.json").read_text())["roster_id"], MY_ROSTER)
+        plans = json.loads((d / "plan.json").read_text())
+        self.assertEqual(len(plans), 12)   # every team gets a plan
+        self.assertEqual(plans[str(MY_ROSTER)]["roster_id"], MY_ROSTER)
         teams_json = json.loads((d / "teams.json").read_text())
         self.assertTrue(all("window" in t for t in teams_json))
         pj = json.loads((d / "picks.json").read_text())

@@ -94,9 +94,11 @@ def main(argv: list[str] | None = None) -> int:
                 print("Picks: " + ", ".join(f"{k} {v}" for k, v in pk.items()))
                 ow = owners.build(store)
                 print("Owners: " + ", ".join(f"{k} {v}" for k, v in ow.items()))
-                if res.my_roster_id:
-                    sug = trade.find_trades(store, res.my_roster_id)
-                    print(f"Trade finder: {len(sug)} suggestions" + (f", top: give {sug[0]['give_label']} for {sug[0]['get_label']} ({sug[0]['partner_team']})" if sug else ""))
+                sug = trade.find_trades_all(store)
+                per_team = {}
+                for r in sug:
+                    per_team[r["team"]] = per_team.get(r["team"], 0) + 1
+                print(f"Trade finder: {len(sug)} suggestions across {len(per_team)} teams")
 
         if args.command == "refresh" and not args.quick:
             store.commit()

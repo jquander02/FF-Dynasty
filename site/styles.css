@@ -193,6 +193,22 @@ tr.me td { background: var(--marker-soft); }
 tr.me td:first-child { box-shadow: inset 4px 0 0 var(--marker); color: var(--ink); font-weight: 700; }
 .wide { display: none; }
 @media (min-width: 600px) { .wide { display: table-cell; } .tname { max-width: none; } }
+.user { font-weight: 450; font-size: 0.86em; color: var(--muted); white-space: nowrap; }
+.sub2 { display: flex; align-items: center; gap: 6px; margin-top: 2px; flex-wrap: wrap; }
+.sub2 .win { display: inline-flex; margin: 0; }
+th .th-sort {
+  font: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: pointer;
+  white-space: nowrap; display: inline-flex; align-items: center; gap: 3px; min-height: 24px;
+}
+th.num .th-sort { flex-direction: row; }
+th .th-sort.on { color: var(--ink); }
+th .th-sort:focus-visible { outline: 2px solid var(--turf); outline-offset: 2px; border-radius: 3px; }
+.arrow { font-size: 9px; min-width: 8px; }
+.sortby { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; font-size: 13px; color: var(--muted); }
+.sortby select { flex: 1; }
+.controls.pair label { display: flex; flex-direction: column; gap: 4px; flex: 1 1 160px; min-width: 0; font-size: 12px; font-weight: 600; color: var(--muted); }
+.controls.pair label select { flex: none; width: 100%; }
+.controls.pair .btn { align-self: flex-end; }
 
 /* ---------- controls ---------- */
 .controls { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }

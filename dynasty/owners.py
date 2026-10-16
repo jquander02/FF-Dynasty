@@ -111,6 +111,7 @@ def build(store: Store) -> dict:
                         if other != rid and owner_of.get((lid, other)):
                             p["partners"][owner_of[(lid, other)]] += 1
                 sides.append({"roster_id": rid, "user_id": uid, "team": names.get(uid, {}).get("team"),
+                              "owner": names.get(uid, {}).get("owner"),
                               "received": items.get(rid, []), "value_now": round(got[rid]), "net": round(net)})
             reviews.append({"transaction_id": t["transaction_id"], "season": leagues.get(lid), "week": t["week"],
                             "ts": t["status_updated"] or t["created"], "sides": json.dumps(sides)})

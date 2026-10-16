@@ -112,6 +112,11 @@ class Phase4PipelineTest(Phase3PipelineTest):
         self.assertIn("Christian McCaffrey", r["give_label"])
         self.assertGreater(json.loads(r["their_delta"])[0], 0.3)   # helps the contender now
         self.assertGreaterEqual(r["get_value"], 0.75 * r["give_value"])
+        # every team gets suggestions; ids are unique
+        every = trade.find_trades_all(self.store)
+        self.assertTrue(any(r["team"] == MY_ROSTER and json.loads(r["get"]) == ["7002"] for r in every))
+        self.assertEqual(len({r["id"] for r in every}), len(every))
+        self.assertTrue(all(r["team"] != r["partner"] for r in every))
         # export carries finder + owners + lineup projections for the trade lab
         site = self.tmp / "site"
         export.run(self.store, site)
