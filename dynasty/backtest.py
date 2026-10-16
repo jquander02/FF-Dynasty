@@ -143,7 +143,30 @@ def load_bundle(path: str) -> dict:
     with gzip.open(path, "rt", encoding="utf-8") as f:
         b = json.load(f)
     add_late_ppg(b)
+    add_parts(b)
     return b
+
+
+PART_KEYS = ("targets", "rush_att", "pass_att", "rec_td", "rush_td", "pass_td")
+
+
+def add_parts(b: dict) -> None:
+    """Season totals of opportunities and touchdowns (from weekly rows) on each player-season."""
+    w = b.get("weeks") or {}
+    if not w.get("gsis_id") or "rec_td" not in w:
+        return
+    tot = defaultdict(lambda: defaultdict(float))
+    for i, g in enumerate(w["gsis_id"]):
+        t = tot[(g, w["season"][i])]
+        for k in PART_KEYS:
+            v = w[k][i]
+            if v is not None:
+                t[k] += v
+    for s in b["seasons"]:
+        t = tot.get((s["gsis_id"], s["season"]))
+        if t:
+            for k in PART_KEYS:
+                s[k] = t[k]
 
 
 def add_late_ppg(b: dict, n: int = 6) -> None:
@@ -223,17 +246,29 @@ def value_check(b: dict, cfg: ModelConfig, start: int, end: int) -> dict:
     for season, rows in actual.items():
         pool = {g: (s["position"], s["ppg"]) for g, s in rows.items() if s["games"] >= MIN_GAMES}
         real_repl[season], _ = model.replacement_levels(pool, LINEUP, cfg.teams, cfg.replacement_depth)
+    # projections for every offseason, so outcome ranges can be learned from earlier ones
+    projs = {}
+    for through in range(start - 2, end - 2):
+        share: dict = {}
+        projs[through] = (project_as_of(b, through, cfg, share), share)
+    samples = []   # (made as of, target season, pos, horizon, projected, actual, young)
+    for through, (proj, _) in projs.items():
+        for g, v in proj.items():
+            for h, key in ((1, "ppg_y1"), (2, "ppg_y2"), (3, "ppg_y3")):
+                a = actual.get(through + h, {}).get(g)
+                if a and a["games"] >= MIN_GAMES:
+                    samples.append((through + h, v["position"], h, v[key], a["ppg"], v["nfl_year"] <= 2))
     out = []
     for through in range(start - 1, end - 2):
-        share: dict = {}
-        proj = project_as_of(b, through, cfg, share)
+        proj, share = projs[through]
+        ranges = model.fit_outcome_ranges([x[1:] for x in samples if x[0] <= through]) if cfg.use_ranges else None
         repl, _ = model.replacement_levels({k: (v["position"], v["ppg_y1"]) for k, v in proj.items()},
                                            LINEUP, cfg.teams, cfg.replacement_depth)
         for g, v in proj.items():
             pos = v["position"]
             if pos not in POSITIONS:
                 continue
-            parts = model.value_parts(v, repl.get(pos, 0.0), share, cfg, 0)
+            parts = model.value_parts(v, repl.get(pos, 0.0), share, cfg, 0, ranges)
             pred = sum(parts[1:4])
             real = 0.0
             for h in (1, 2, 3):

@@ -90,6 +90,22 @@ top-36 hit rate 49% -> 57%, next-season PPG error 3.45 -> 3.28 (luck floor about
 Per-position projection settings were tried and dropped: they won in-sample but not out of
 sample. Late-season form and usage stats (target share, snaps) didn't improve the scores.
 
+**Learned corrections (`dynasty/learned.py`).** Gradient-boosted trees (scikit-learn) trained on
+the database's own history at four points each season (late August, after weeks 4, 8, 12). They
+see workload and efficiency separately (targets, carries, pass attempts; yards per touch; TD
+rates), role (snap, target and team shares), the season so far, team context as of that point
+(new team, targets and carries that left, best teammate at the position, rookies drafted there,
+the team's QB and volume), contract (cap share, guarantees, years left), games history, draft
+slot, combine numbers, and the hand-built projection, and learn corrections to it. In
+rolling-origin tests (each season predicted only from earlier ones) they improve the current
+season: rest-of-season PPG error after week 4 3.42 -> 3.27, preseason 3.30 -> 3.25, and
+current-season games-share error 0.27 -> 0.21. Applied to later seasons they made value rankings
+worse, so the app uses them for this season only (`ModelConfig.learned_current`). Also tested
+and left off: training trees directly on three-season value (overfits: 0.47-0.52 vs 0.60),
+real outcome ranges instead of a bell curve (better-calibrated stars, slightly worse ranking),
+touchdown regression, and extra weight on in-season games. Re-run with
+`python -m dynasty.learned evaluate backtest-bundle.json.gz`.
+
 Tables: `player_week`, `player_season`, `age_curve`, `draft_prior`, `player_projection`,
 `market_value` (dated), `player_value` (dated, so value trends build up over time).
 

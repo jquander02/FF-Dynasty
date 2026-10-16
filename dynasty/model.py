@@ -58,6 +58,11 @@ class ModelConfig:
     actual_vs_expected: float = 1.0       # PPG blend: actual vs expected fantasy points
     regress_games: float = 2.0            # pseudo-games at the position's average PPG (pulls extremes in)
     late_weight: float = 0.0              # weight on the last 6 games of the latest season (tested: no help)
+    inseason_weight: float = 1.0          # extra weight on this season's games while it's in progress (tested: 1.0 best)
+    use_ranges: bool = False              # value from real outcome ranges (fit_outcome_ranges) when available
+    td_regress: float = 0.0               # share of touchdowns above/below expectation removed from PPG (tested: no help)
+    learned_current: bool = True          # learned corrections for this season's PPG and games (learned.py)
+    pass_td_pts: float = 4.0              # league points per passing TD
     # draft prior (rookies and NFL years 1-3)
     prior_curve: bool = True              # smooth curve in log(pick) rather than pick ranges
     prior_per_game: bool = True           # points per game played; how often draftees play feeds availability
@@ -384,6 +389,18 @@ def project(players: list[dict], seasons: list[dict], curves: dict, prior: dict,
         if current - 1 <= srow["season"] <= current and srow["games"] >= 6 and srow["position"] in POSITIONS:
             pool[srow["position"]].append(srow["ppg"])
     pos_mean = {k: sum(v) / len(v) for k, v in pool.items() if v}
+    # league touchdown rates per opportunity, by season and position (for TD regression)
+    td_rate = {}
+    if cfg.td_regress:
+        acc = defaultdict(lambda: [0.0] * 6)
+        for srow in seasons:
+            if srow.get("targets") is None:
+                continue
+            a = acc[(srow["season"], srow["position"])]
+            for i, k in enumerate(("rec_td", "targets", "rush_td", "rush_att", "pass_td", "pass_att")):
+                a[i] += srow.get(k) or 0.0
+        for key, a in acc.items():
+            td_rate[key] = (a[0] / a[1] if a[1] else 0.0, a[2] / a[3] if a[3] else 0.0, a[4] / a[5] if a[5] else 0.0)
     proj = {}
     for p in players:
         pid, pos, g = p["key"], p["position"], p["gsis_id"]
@@ -434,6 +451,14 @@ def project(players: list[dict], seasons: list[dict], curves: dict, prior: dict,
             ppg = srow["ppg"]
             if srow.get("xppg") is not None:
                 ppg = pc.actual_vs_expected * ppg + (1 - pc.actual_vs_expected) * srow["xppg"]
+            if pc.td_regress and srow.get("targets") is not None:
+                rr, ru, rp = td_rate.get((srow["season"], pos), (0.0, 0.0, 0.0))
+                actual_td = 6 * ((srow.get("rec_td") or 0) + (srow.get("rush_td") or 0)) + cfg.pass_td_pts * (srow.get("pass_td") or 0)
+                exp_td = 6 * ((srow.get("targets") or 0) * rr + (srow.get("rush_att") or 0) * ru) \
+                    + cfg.pass_td_pts * (srow.get("pass_att") or 0) * rp
+                ppg -= pc.td_regress * (actual_td - exp_td) / srow["games"]
+            if i == 0 and current_games is not None:
+                w = w * cfg.inseason_weight   # current season in progress
             if i == 0 and pc.late_weight and srow.get("ppg_late") is not None:
                 ppg = (1 - pc.late_weight) * ppg + pc.late_weight * srow["ppg_late"]   # current role
             a_then = age_on(bd, current - i)
@@ -499,7 +524,47 @@ def availability(v: dict, offset: int, share: dict, cfg: ModelConfig) -> float:
     return min(cfg.availability, sh) if sh is not None else cfg.availability
 
 
-def value_parts(v: dict, repl: float, share: dict, cfg: ModelConfig, games_left: int) -> list[float]:
+RANGE_TIERS = (0.5, 0.8)    # projected-PPG tiers within position: bottom half, next 30%, top 20%
+
+
+def fit_outcome_ranges(samples: list[tuple], min_n: int = 30) -> dict:
+    """samples: (pos, horizon 1-3, projected PPG, actual PPG, young). Returns the real spread of
+    actual / projected PPG by position, horizon, projection tier and young-or-not, as 41
+    quantiles: what the model's projections have actually turned into."""
+    by_ph = defaultdict(list)
+    for pos, h, pp, _, _ in samples:
+        by_ph[(pos, h)].append(pp)
+    tiers = {}
+    for k, v in by_ph.items():
+        v = sorted(v)
+        if len(v) >= min_n:
+            tiers[k] = [v[int(q * (len(v) - 1))] for q in RANGE_TIERS]
+    ratios = defaultdict(list)
+    for pos, h, pp, act, young in samples:
+        if pp < 1:
+            continue
+        t = sum(1 for c in tiers.get((pos, h), []) if pp >= c)
+        ratios[(pos, h, t, young)].append(act / pp)
+        ratios[(pos, h, t, None)].append(act / pp)
+    out = {}
+    for k, v in ratios.items():
+        if len(v) >= min_n:
+            v = sorted(v)
+            out[k] = [v[int(i * (len(v) - 1) / 40)] for i in range(41)]
+    return {"tiers": tiers, "ratios": out}
+
+
+def range_excess(ranges: dict, pos: str, h: int, ppg: float, repl: float, young: bool) -> float | None:
+    """E[max(0, PPG - repl)] over the real outcome range, or None when there's no range."""
+    t = sum(1 for c in ranges.get("tiers", {}).get((pos, h), []) if ppg >= c)
+    rs = ranges.get("ratios", {}).get((pos, h, t, young)) or ranges.get("ratios", {}).get((pos, h, t, None))
+    if not rs:
+        return None
+    return sum(max(0.0, ppg * x - repl) for x in rs) / len(rs)
+
+
+def value_parts(v: dict, repl: float, share: dict, cfg: ModelConfig, games_left: int,
+                ranges: dict | None = None) -> list[float]:
     """Expected points above replacement, undiscounted: [rest of this season, +1, +2, +3 seasons].
     The projection is treated as a range (wider for young players and later seasons), so a player
     near replacement level still has upside value."""
@@ -508,8 +573,19 @@ def value_parts(v: dict, repl: float, share: dict, cfg: ModelConfig, games_left:
     keys = ("ppg_ros", "ppg_y1", "ppg_y2", "ppg_y3")
     games = (games_left,) + (cfg.season_games,) * 3
     k_pos = (cfg.position_scale or {}).get(v["position"], 1.0)
-    return [k_pos * games[i] * availability(v, i, share, cfg)
-            * expected_excess(v[k], (cv0 + 0.06 * i * scale) * v[k], repl) for i, k in enumerate(keys)]
+    young = v["nfl_year"] <= 2
+    out = []
+    for i, k in enumerate(keys):
+        avail = availability(v, i, share, cfg)
+        if i == 0 and v.get("ros_share") is not None:
+            avail = v["ros_share"]          # learned share of the remaining games this season
+        ex = None
+        if ranges and cfg.use_ranges:
+            ex = range_excess(ranges, v["position"], max(1, i), v[k], repl, young)
+        if ex is None:
+            ex = expected_excess(v[k], (cv0 + 0.06 * i * scale) * v[k], repl)
+        out.append(k_pos * games[i] * avail * ex)
+    return out
 
 
 def build(store: Store, cfg: ModelConfig | None = None) -> dict:
@@ -609,6 +685,22 @@ def build(store: Store, cfg: ModelConfig | None = None) -> dict:
     proj = project(players, seasons, curves, prior, current, cfg,
                    current_games=last_leg if state.get("season_type") == "regular" else None)
 
+    learned_n = 0
+    if cfg.learned_current:
+        try:
+            from . import learned
+            week = last_leg if state.get("season_type") == "regular" else 0
+            cur = learned.current_season(store, cfg, current, week)
+            for v in proj.values():
+                hit = cur.get(v.get("gsis_id")) if v.get("gsis_id") else None
+                if hit:
+                    v["ppg_ros_hand"] = v["ppg_ros"]
+                    v["ppg_ros"] = round(hit[0], 2)
+                    v["ros_share"] = round(hit[1], 3)
+                    learned_n += 1
+        except Exception as e:  # never let the add-on break the refresh
+            log.warning("learned corrections skipped: %s", e)
+
     repl, starters = replacement_levels(
         {k: (v["position"], v["ppg_y1"]) for k, v in proj.items()},
         roster_positions, cfg.teams, cfg.replacement_depth,
@@ -627,4 +719,5 @@ def build(store: Store, cfg: ModelConfig | None = None) -> dict:
         "replacement_ppg": {k: round(v, 1) for k, v in repl.items()},
         "starters_counted": starters,
         "rest_of_season_weeks": remaining,
+        "learned_current_season": learned_n,
     }
