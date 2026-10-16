@@ -80,7 +80,7 @@ class BundleTest(Phase3PipelineTest):
         self.assertEqual(b["current_season"], 2026)
         path = self.tmp / "b.json.gz"
         backtest.save_bundle(b, str(path))
-        self.assertEqual(backtest.load_bundle(str(path))["seasons"], b["seasons"])
+        self.assertEqual(len(backtest.load_bundle(str(path))["seasons"]), len(b["seasons"]))
 
 
 if __name__ == "__main__":

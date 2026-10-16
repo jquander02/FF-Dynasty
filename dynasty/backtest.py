@@ -117,7 +117,24 @@ def save_bundle(bundle: dict, path: str) -> None:
 
 def load_bundle(path: str) -> dict:
     with gzip.open(path, "rt", encoding="utf-8") as f:
-        return json.load(f)
+        b = json.load(f)
+    add_late_ppg(b)
+    return b
+
+
+def add_late_ppg(b: dict, n: int = 6) -> None:
+    """Each player-season gets ppg_late: PPG over his last `n` games that season (from weekly rows)."""
+    w = b.get("weeks") or {}
+    if not w.get("gsis_id"):
+        return
+    games = defaultdict(list)
+    for g, season, week, pts in zip(w["gsis_id"], w["season"], w["week"], w["pts"]):
+        if pts is not None:
+            games[(g, season)].append((week, pts))
+    for s in b["seasons"]:
+        gl = sorted(games.get((s["gsis_id"], s["season"]), []))[-n:]
+        if len(gl) >= 3:
+            s["ppg_late"] = round(sum(p for _, p in gl) / len(gl), 2)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -133,8 +150,11 @@ def players_as_of(b: dict, through: int) -> list[dict]:
             first[g] = min(first.get(g, 9999), s["season"])
             pos[g] = s["position"]
     draft = {p["gsis_id"]: p for p in b["picks"] if p["gsis_id"]}
+    recent = {s["gsis_id"] for s in b["seasons"] if through - 1 <= s["season"] <= through}
     out = []
     for g, fs in first.items():
+        if g not in recent:
+            continue   # out of the league for two seasons (retired, released): not on a dynasty roster
         d = draft.get(g)
         out.append(_player(b, g, pos[g], d, years_exp=through - fs + 0))
     for p in b["picks"]:
@@ -150,13 +170,156 @@ def _player(b, g, pos, d, years_exp):
             "draft": {"year": d["year"], "pick": d["pick"]} if d and d.get("pick") else None}
 
 
-def project_as_of(b: dict, through: int, cfg: ModelConfig) -> dict:
+def project_as_of(b: dict, through: int, cfg: ModelConfig, share: dict | None = None) -> dict:
     seasons = [s for s in b["seasons"] if s["season"] <= through]
     birth = {g: date.fromisoformat(v) for g, v in b["birth"].items()}
     picks = [p for p in b["picks"] if p["year"] <= through]
     curves = model.fit_age_curves(seasons, birth, through, cfg, current_complete=True)
-    prior = model.fit_draft_prior(picks, seasons, through, current_complete=True, per_game=cfg.prior_per_game)
+    prior = model.fit_draft_prior(picks, seasons, through, current_complete=True, per_game=cfg.prior_per_game,
+                                  share=share)
     return model.project(players_as_of(b, through), seasons, curves, prior, through, cfg)
+
+
+LINEUP = ["QB", "RB", "RB", "WR", "WR", "TE", "FLEX"]   # this league's starting lineup
+
+
+def value_check(b: dict, cfg: ModelConfig, start: int, end: int) -> dict:
+    """Did players produce what the model valued them at?
+
+    As of each offseason with three finished seasons after it, every player's model value (the
+    same formula as the app: expected points above a replacement starter over the next three
+    seasons, undiscounted) is compared with what he actually produced: games x (PPG - that
+    season's real replacement level), floored at zero per season. Replacement levels come from
+    this league's lineup (12 teams, QB/2RB/2WR/TE/FLEX, 1.5x starters deep), from projections for
+    the valuation and from actual PPG (6+ games) for the outcome."""
+    actual = defaultdict(dict)
+    for s in b["seasons"]:
+        actual[s["season"]][s["gsis_id"]] = s
+    real_repl = {}
+    for season, rows in actual.items():
+        pool = {g: (s["position"], s["ppg"]) for g, s in rows.items() if s["games"] >= MIN_GAMES}
+        real_repl[season], _ = model.replacement_levels(pool, LINEUP, cfg.teams, cfg.replacement_depth)
+    out = []
+    for through in range(start - 1, end - 2):
+        share: dict = {}
+        proj = project_as_of(b, through, cfg, share)
+        repl, _ = model.replacement_levels({k: (v["position"], v["ppg_y1"]) for k, v in proj.items()},
+                                           LINEUP, cfg.teams, cfg.replacement_depth)
+        for g, v in proj.items():
+            pos = v["position"]
+            if pos not in POSITIONS:
+                continue
+            parts = model.value_parts(v, repl.get(pos, 0.0), share, cfg, 0)
+            pred = sum(parts[1:4])
+            real = 0.0
+            for h in (1, 2, 3):
+                a = actual.get(through + h, {}).get(g)
+                if a and a["games"]:
+                    real += a["games"] * max(0.0, a["ppg"] - real_repl[through + h].get(pos, 0.0))
+            if pred < 5 and real < 5:
+                continue
+            out.append({"g": g, "name": v.get("name"), "pos": pos, "through": through, "age": v["age"],
+                        "nfl_year": v["nfl_year"], "pred": pred, "real": real})
+    return summarize_values(out)
+
+
+def luck_floor(b: dict, rows: list[dict]) -> float | None:
+    """Average error a perfect forecaster of each player's true per-game level would still make,
+    from week-to-week randomness alone: sqrt(2/pi) x weekly SD / sqrt(games), over the same rows."""
+    w = b.get("weeks") or {}
+    if not w.get("gsis_id"):
+        return None
+    pts = defaultdict(list)
+    for g, season, p in zip(w["gsis_id"], w["season"], w["pts"]):
+        if p is not None:
+            pts[(g, season)].append(p)
+    errs = []
+    for r in rows:
+        x = pts.get((r["g"], r["season"]))
+        if x and len(x) >= 2:
+            errs.append(math.sqrt(2 / math.pi) * statistics.stdev(x) / math.sqrt(len(x)))
+    return round(statistics.mean(errs), 2) if errs else None
+
+
+def explained(b: dict, rows: list[dict]) -> dict | None:
+    """Share of the variation in next-season PPG the model explains (R^2), against the most any
+    forecast could explain once week-to-week luck is removed (1 - luck variance / total variance)."""
+    w = b.get("weeks") or {}
+    if not w.get("gsis_id") or len(rows) < 30:
+        return None
+    pts = defaultdict(list)
+    for g, season, p in zip(w["gsis_id"], w["season"], w["pts"]):
+        if p is not None:
+            pts[(g, season)].append(p)
+    use = [(r, pts.get((r["g"], r["season"]))) for r in rows]
+    use = [(r, x) for r, x in use if x and len(x) >= 2]
+    act = [r["actual"] for r, _ in use]
+    var = statistics.pvariance(act)
+    luck = statistics.mean(statistics.variance(x) / len(x) for _, x in use)
+    out = {"max_r2": round(1 - luck / var, 3)}
+    for key in ("model", "avg", "last"):
+        sub = [(r[key], r["actual"]) for r, _ in use if r.get(key) is not None]
+        mse = statistics.mean((p - a) ** 2 for p, a in sub)
+        out[key] = round(1 - mse / var, 3)
+    out["share_of_possible"] = round(out["model"] / out["max_r2"], 3)
+    return out
+
+
+def _tier(rank: int) -> str:
+    for cut, lab in ((12, "top 12"), (24, "13-24"), (48, "25-48"), (96, "49-96")):
+        if rank <= cut:
+            return lab
+    return "97+"
+
+
+def summarize_values(rows: list[dict]) -> dict:
+    """Calibration (valued vs produced) by tier, position, age and NFL year, rank agreement, and
+    the biggest misses either way."""
+    by_year = defaultdict(list)
+    for r in rows:
+        by_year[r["through"]].append(r)
+    for yr, sub in by_year.items():
+        for i, r in enumerate(sorted(sub, key=lambda x: -x["pred"]), 1):
+            r["rank"] = i
+        for pos in POSITIONS:
+            for i, r in enumerate(sorted((x for x in sub if x["pos"] == pos), key=lambda x: -x["pred"]), 1):
+                r["pos_rank"] = i
+
+    def cal(sub):
+        if not sub:
+            return {"n": 0}
+        p, a = sum(r["pred"] for r in sub), sum(r["real"] for r in sub)
+        return {"n": len(sub), "valued": round(p / len(sub)), "produced": round(a / len(sub)),
+                "ratio": round(a / p, 2) if p else None,
+                "beat": round(sum(1 for r in sub if r["real"] > r["pred"]) / len(sub), 2),
+                "mae": round(statistics.mean(abs(r["real"] - r["pred"]) for r in sub))}
+
+    top = [r for r in rows if r["rank"] <= 150]   # the dynasty-relevant pool each offseason
+    rep = {"players": len(rows), "offseasons": sorted(by_year)}
+    rep["overall_top150"] = cal(top)
+    rep["by_tier"] = {t: cal([r for r in rows if _tier(r["rank"]) == t]) for t in ("top 12", "13-24", "25-48", "49-96", "97+")}
+    rep["by_position"] = {pos: cal([r for r in top if r["pos"] == pos]) for pos in POSITIONS}
+    rep["by_age"] = {f"{pos} {band}": cal([r for r in top if r["pos"] == pos and age_band(r["age"]) == band])
+                     for pos in POSITIONS for band in ("<23", "23-25", "26-28", "29-31", "32+")}
+    rep["by_nfl_year"] = {f"{pos} yr{n}": cal([r for r in top if r["pos"] == pos and r["nfl_year"] == n])
+                          for pos in POSITIONS for n in (0, 1, 2)}
+    cors, hits = [], []
+    for yr, sub in by_year.items():
+        s2 = [r for r in sub if r["rank"] <= 150]
+        c = spearman([r["pred"] for r in s2], [r["real"] for r in s2])
+        if c is not None:
+            cors.append(c)
+        real_top = {r["g"] for r in sorted(sub, key=lambda x: -x["real"])[:36]}
+        hits.append(sum(1 for r in sub if r["rank"] <= 36 and r["g"] in real_top) / 36)
+    rep["rank_corr_top150"] = round(statistics.mean(cors), 3) if cors else None
+    rep["rank_corr_by_offseason"] = {yr: round(c, 3) for yr, c in zip(by_year, cors)} if len(cors) == len(by_year) else None
+    rep["top36_hit_rate"] = round(statistics.mean(hits), 3) if hits else None
+    rep["abs_error_top150"] = round(statistics.mean(abs(r["real"] - r["pred"]) for r in top)) if top else None
+    fmt = lambda r: {"name": r["name"], "pos": r["pos"], "as_of": r["through"], "age": r["age"],
+                     "valued": round(r["pred"]), "produced": round(r["real"])}
+    rep["most_overvalued"] = [fmt(r) for r in sorted(top, key=lambda r: r["real"] - r["pred"])[:12]]
+    rep["most_undervalued"] = [fmt(r) for r in sorted(rows, key=lambda r: r["pred"] - r["real"])[:12]]
+    return rep
 
 
 def baselines(b: dict, through: int, cfg: ModelConfig) -> dict:
@@ -307,6 +470,9 @@ def run(b: dict, cfg: ModelConfig | None = None, start: int | None = None, end: 
                 cs.append(c)
         vr[pos] = round(statistics.mean(cs), 3) if cs else None
     report["value_rank_3yr"] = vr
+    report["value"] = value_check(b, cfg, start, end)
+    report["luck_floor_h1"] = luck_floor(b, [r for r in rows if r["h"] == 1])
+    report["explained_h1"] = explained(b, [r for r in rows if r["h"] == 1])
     # biggest misses, horizon 1, for a sanity read
     misses = sorted((r for r in rows if r["h"] == 1), key=lambda r: -abs(r["model"] - r["actual"]))[:15]
     report["biggest_misses_h1"] = [{"name": r["name"], "pos": r["pos"], "season": r["season"], "age": r["age"] and round(r["age"], 1),
@@ -350,8 +516,14 @@ def main(argv=None) -> int:
     print(f"as of {rep['as_of'][0]}..{rep['as_of'][1]}  rows {rep['rows']}")
     for h in ("h1", "h2", "h3"):
         print(f"  {h}: " + "  ".join(f"{k} MAE {v.get('mae')} bias {v.get('bias')} (n {v['n']})" for k, v in o[h].items()))
+    print(f"  luck floor (h1): {rep.get('luck_floor_h1')}  explained (R^2): {rep.get('explained_h1')}")
     print("  rank (h1, Spearman):", rep["rank_h1"])
     print("  3-season value rank:", rep["value_rank_3yr"])
+    v = rep["value"]
+    print(f"  value check ({len(v['offseasons'])} offseasons, top 150): {v['overall_top150']}  "
+          f"rank corr {v['rank_corr_top150']}  top-36 hit rate {v['top36_hit_rate']}")
+    print("  by tier:", {k: (x.get("ratio"), x.get("beat")) for k, x in v["by_tier"].items()})
+    print("  by position:", {k: (x.get("ratio"), x.get("beat")) for k, x in v["by_position"].items()})
     return 0
 
 

@@ -64,15 +64,31 @@ reload button at the top fetches the newest refresh. Each screen has a "How this
    60% model / 30% FantasyCalc / 10% DynastyProcess. Change the mix in `config.yaml`
    under `value_weights`.
 
-**Backtest.** `dynasty/backtest.py` refits the model as of each offseason from 2015 to 2024
-using only data available then, projects the next three seasons, and scores them against what
-happened (PPG error and bias by horizon, position, age and NFL year; rank correlation within
-position; three-season value rank), next to two baselines: last season's PPG and a recency-
-weighted average. Every refresh runs it and posts the scores as a "Backtest" annotation; the
-history bundle and full report are saved to the `site-data` branch under `backtest/`. Run it
-locally with `python -m dynasty.backtest run backtest-bundle.json.gz [--set key=value ...]`.
-First results (Oct 2026), next-season PPG error: model 3.47, weighted average 3.51, last
-season 3.71 (was 3.86 before fixing the draft prior and retuning).
+**Backtest.** `dynasty/backtest.py` reruns the model as of each offseason from 2015 to 2024 using
+only data available then and checks it two ways:
+- *Points per game:* projections for the next three seasons against what happened, next to two
+  baselines (last season's PPG, a recency-weighted average) and the luck floor (the error a
+  perfect forecaster would still make from week-to-week randomness).
+- *Value:* each player's model value against what he actually produced over the next three
+  seasons (points above that season's replacement level, missed games counting as zero): how
+  well value ranks production, how often the model's top 36 really finish top 36, and whether
+  players beat or fall short of their valuation by position, age, NFL year and value tier.
+
+Every refresh runs it and posts the scores as a "Backtest" annotation; the history bundle and
+full report are saved to the `site-data` branch under `backtest/`. Locally:
+`python -m dynasty.backtest run backtest-bundle.json.gz [--set key=value ...]`.
+
+What the backtest changed (Oct 2026): the draft prior no longer counts seasons outside the data
+as zeros and is now a smooth curve in draft slot (points per game played, with how often
+draftees play feeding expected games); expected games come from each player's own playing time
+(QBs: snaps, so backups' cameo games don't count as starts); projections are pulled slightly
+toward the position average; the upside range used for value is narrower; and each position's
+value is calibrated so a point of value means the same production at every position (QBs had
+produced only about a third of their valuation). Tested on seasons the tuning never saw
+(tuned on 2015-18, scored on 2019-21): value-to-production rank correlation 0.50 -> 0.62,
+top-36 hit rate 49% -> 57%, next-season PPG error 3.45 -> 3.28 (luck floor about 1.5).
+Per-position projection settings were tried and dropped: they won in-sample but not out of
+sample. Late-season form and usage stats (target share, snaps) didn't improve the scores.
 
 Tables: `player_week`, `player_season`, `age_curve`, `draft_prior`, `player_projection`,
 `market_value` (dated), `player_value` (dated, so value trends build up over time).

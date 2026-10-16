@@ -21,7 +21,7 @@ import json
 import logging
 import math
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 
 from .store import Store
@@ -43,21 +43,41 @@ PICK_BUCKETS = [(12, "1-12"), (32, "13-32"), (64, "33-64"), (100, "65-100"), (16
 
 @dataclass
 class ModelConfig:
+    """Defaults tuned on the backtest (dynasty/backtest.py, offseasons 2015-2024): first for
+    next-season PPG error, then for how well model value ranks what players went on to produce
+    over three seasons (all positions together), with each position's value calibrated so a
+    point of value means the same production at QB, RB, WR and TE."""
+    # aging curves
     min_games_curve: int = 6
     curve_min_games_next: int = 6         # games needed in the following season for an aging pair
-    curve_basis: str = "ppg"              # "ppg" or "blend" (actual/expected mix, less noisy)
+    curve_basis: str = "ppg"              # "ppg" or "blend" (actual/expected mix)
     curve_weight: str = "min"             # pair weight: "min" games or "harmonic" mean
-    curve_shrink_games: float = 200.0     # games of evidence needed to move halfway off the prior (backtested)
-    recency: tuple = (1.0, 0.6, 0.3)      # weights for current, last, 2 seasons ago (backtested)
-    actual_vs_expected: float = 0.75      # PPG blend: actual vs expected fantasy points
-    prior_games: float = 4.0              # pseudo-games given to the draft prior, NFL years 1-3 (backtested)
-    prior_per_game: bool = True           # draft prior in points per game played (False: per 17 games)
-    vet_prior_share: float = 0.0          # share of prior_games given to the draft prior after NFL year 3
-    availability: float = 0.85            # share of games a player is expected to play
+    curve_shrink_games: float = 200.0     # games of evidence needed to move halfway off the prior shape
+    # talent estimate
+    recency: tuple = (1.0, 0.5, 0.25)     # weights for the latest season, one before, two before
+    actual_vs_expected: float = 1.0       # PPG blend: actual vs expected fantasy points
+    regress_games: float = 2.0            # pseudo-games at the position's average PPG (pulls extremes in)
+    late_weight: float = 0.0              # weight on the last 6 games of the latest season (tested: no help)
+    # draft prior (rookies and NFL years 1-3)
+    prior_curve: bool = True              # smooth curve in log(pick) rather than pick ranges
+    prior_per_game: bool = True           # points per game played; how often draftees play feeds availability
+    prior_games: float = 1.0              # pseudo-games given to the draft prior in NFL years 1-3
+    vet_prior_share: float = 0.0          # share of prior_games kept after NFL year 3
+    growth_cap: float = 1.8               # max year-1 -> year-3 PPG growth from the draft-class trajectory
+    # per-position overrides of the settings above (e.g. {"TE": {"recency": (1, .4, .2)}}). Left empty:
+    # per-position tuning beat the shared settings in-sample but not on held-out seasons.
+    by_position: dict = field(default_factory=dict)
+    # value
+    availability: float = 0.8             # typical share of games played (cap for veterans)
+    play_from_history: bool = True        # expected games from each player's own playing time (QBs: snaps)
+    play_shrink: float = 0.25             # pseudo-seasons at the typical availability
+    play_cap: bool = True                 # never above `availability`
+    uncertainty_scale: float = 0.4        # width of the projection range used for upside value
+    young_uncertainty_scale: float = 0.2  # same, for rookies and players with under a season of games
+    position_scale: dict = field(default_factory=lambda: {"QB": 0.854, "RB": 1.152, "WR": 1.108, "TE": 0.886})
     season_games: int = 17
     discounts: tuple = (1.0, 0.9, 0.75, 0.6)  # rest-of-season, +1, +2, +3 seasons
-    replacement_depth: float = 1.5        # replacement = starters x this, per position
-    growth_cap: float = 1.8               # max year-1 -> year-3 PPG growth from the draft-class trajectory
+    replacement_depth: float | dict = 1.5  # replacement = starters x this (a number, or one per position)
     teams: int = 12
     extra: dict = field(default_factory=dict)
 
@@ -193,6 +213,7 @@ def fit_draft_prior(picks: list[dict], seasons: list[dict], current: int, curren
     first = min((s["season"] for s in seasons), default=current)
     rows = {(s["gsis_id"], s["season"]): s for s in seasons}
     acc = defaultdict(lambda: [0.0, 0.0, 0])   # pts, games, players
+    obs = defaultdict(list)                    # (pos, n) -> [(log pick, ppg, games)]
     for p in picks:
         pos, yr = p["position"], p["year"]
         if pos not in POSITIONS or yr is None:
@@ -203,6 +224,8 @@ def fit_draft_prior(picks: list[dict], seasons: list[dict], current: int, curren
             if s >= last or s < first:
                 continue
             r = rows.get((p["gsis_id"], s))
+            obs[(pos, n)].append((math.log(p["pick"] or 300), (r["pts"] / r["games"]) if r and r["games"] else None,
+                                  r["games"] if r else 0))
             a = acc[(pos, b, n)]
             a[0] += r["pts"] if r else 0.0
             a[1] += r["games"] if r else 0
@@ -225,6 +248,31 @@ def fit_draft_prior(picks: list[dict], seasons: list[dict], current: int, curren
             prior[k] = round(pts / 17.0 / n, 3)
         if share is not None:
             share[k] = round(games / 17.0 / n, 3)
+    # smooth draft-capital curves: PPG (games-weighted) and share of games played vs log(pick)
+    for (pos, n), ob in obs.items():
+        pts = [(x, y, g) for x, y, g in ob if y is not None and g > 0]
+        fit = _wls([x for x, _, _ in pts], [y for _, y, _ in pts], [g for _, _, g in pts])
+        sfit = _wls([x for x, _, _ in ob], [g / 17.0 for _, _, g in ob], [1.0] * len(ob))
+        if fit and len(pts) >= 15:
+            prior[(pos, "CURVE", n)] = fit
+        if sfit and len(ob) >= 15 and share is not None:
+            share[(pos, "CURVE", n)] = sfit
+    # fill gaps: a bucket with no players borrows the average of its neighbouring buckets
+    order = [b for _, b in PICK_BUCKETS]
+    for pos in POSITIONS:
+        for n in (1, 2, 3):
+            for i, b in enumerate(order):
+                if (pos, b, n) in prior:
+                    continue
+                nb = [prior[(pos, order[j], n)] for j in (i - 1, i + 1) if 0 <= j < len(order) and (pos, order[j], n) in prior]
+                if nb:
+                    prior[(pos, b, n)] = round(sum(nb) / len(nb), 3)
+    # still empty (very little draft history): the position's pooled picks 1-100
+    for pos in POSITIONS:
+        for n in (1, 2, 3):
+            for b in order:
+                if (pos, b, n) not in prior and (pos, "POOLED", n) in prior:
+                    prior[(pos, b, n)] = prior[(pos, "POOLED", n)]
     # fill gaps: a missing year uses the nearest year available for that bucket
     for pos in POSITIONS:
         for _, b in PICK_BUCKETS + [(0, "UDFA")]:
@@ -234,6 +282,25 @@ def fit_draft_prior(picks: list[dict], seasons: list[dict], current: int, curren
                     if alt:
                         prior[(pos, b, n)] = alt[0]
     return prior
+
+
+def _wls(xs: list[float], ys: list[float], ws: list[float]):
+    """Weighted least squares line y = a + b x. Returns (a, b) or None."""
+    sw = sum(ws)
+    if sw <= 0 or len(xs) < 3:
+        return None
+    mx = sum(w * x for w, x in zip(ws, xs)) / sw
+    my = sum(w * y for w, y in zip(ws, ys)) / sw
+    sxx = sum(w * (x - mx) ** 2 for w, x in zip(ws, xs))
+    if sxx <= 0:
+        return None
+    b = sum(w * (x - mx) * (y - my) for w, x, y in zip(ws, xs, ys)) / sxx
+    return (round(my - b * mx, 4), round(b, 4))
+
+
+def curve_at(fit, pick, lo: float = 0.0, hi: float | None = None) -> float:
+    v = fit[0] + fit[1] * math.log(pick or 300)
+    return max(lo, min(hi, v) if hi is not None else v)
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +333,7 @@ FLEX_ELIGIBLE = {
 
 
 def replacement_levels(proj: dict[str, tuple[str, float]], roster_positions: list[str],
-                       teams: int, depth: float) -> tuple[dict, dict]:
+                       teams: int, depth: float | dict) -> tuple[dict, dict]:
     """proj: player -> (pos, ppg). Returns ({pos: replacement ppg}, {pos: starters})."""
     slots = defaultdict(int)
     flex = []
@@ -289,7 +356,8 @@ def replacement_levels(proj: dict[str, tuple[str, float]], roster_positions: lis
                 used[best] += 1
     repl = {}
     for pos in POSITIONS:
-        idx = int(round(used[pos] * depth))
+        d = depth.get(pos, 1.5) if isinstance(depth, dict) else depth
+        idx = int(round(used[pos] * d))
         lst = ranked[pos]
         repl[pos] = lst[idx] if idx < len(lst) else (lst[-1] if lst else 0.0)
     return repl, used
@@ -299,7 +367,7 @@ def replacement_levels(proj: dict[str, tuple[str, float]], roster_positions: lis
 # Main build
 # ---------------------------------------------------------------------------
 def project(players: list[dict], seasons: list[dict], curves: dict, prior: dict, current: int,
-            cfg: ModelConfig) -> dict:
+            cfg: ModelConfig, current_games: int | None = None) -> dict:
     """Points-per-game projections from data through season `current`.
 
     players: {key, gsis_id, position, name, years_exp, birth (date), draft ({year, pick}) or None}.
@@ -310,9 +378,16 @@ def project(players: list[dict], seasons: list[dict], curves: dict, prior: dict,
     for srow in seasons:
         if srow["season"] <= current:
             hist[srow["gsis_id"]][srow["season"]] = srow
+    # regression target: average PPG of regular contributors at each position, last two seasons
+    pool = defaultdict(list)
+    for srow in seasons:
+        if current - 1 <= srow["season"] <= current and srow["games"] >= 6 and srow["position"] in POSITIONS:
+            pool[srow["position"]].append(srow["ppg"])
+    pos_mean = {k: sum(v) / len(v) for k, v in pool.items() if v}
     proj = {}
     for p in players:
         pid, pos, g = p["key"], p["position"], p["gsis_id"]
+        pc = replace(cfg, **cfg.by_position[pos]) if cfg.by_position and pos in cfg.by_position else cfg
         bd = p.get("birth")
         age_now = age_on(bd, current)
         ss = hist.get(g, {}) if g else {}
@@ -321,27 +396,56 @@ def project(players: list[dict], seasons: list[dict], curves: dict, prior: dict,
         d = p.get("draft")
         nfl_year = (current - d["year"] + 1) if d else ((p.get("years_exp") or 0) + 1)
         bucket = pick_bucket(d["pick"]) if d else "UDFA"
-        prior_ppg = prior.get((pos, bucket, min(max(nfl_year, 1), 3)))
+        n_now = min(max(nfl_year, 1), 3)
+        prior_ppg = prior.get((pos, bucket, n_now))
+        if cfg.prior_curve and (pos, "CURVE", n_now) in prior:
+            prior_ppg = curve_at(prior[(pos, "CURVE", n_now)], d["pick"] if d else None, lo=1.0)
         if prior_ppg is None:
             prior_ppg = 0.0
 
         num = den = 0.0
         games_hist = 0
-        for i, w in enumerate(cfg.recency):
+        # playing time: weighted share of games played (QBs: games x snap share, so cameo
+        # appearances by backups don't count as starts), seasons since his debut that he missed count as 0
+        pt_num = pt_den = 0.0
+        debut = min(ss) if ss else None
+        for i, w in enumerate(pc.recency):
+            yr = current - i
+            if debut is None or yr < debut:
+                continue
+            srow = ss.get(yr)
+            g_eff = 0.0
+            if srow and srow["games"]:
+                g_eff = srow["games"]
+                if pos == "QB" and srow.get("snap_pct") is not None:
+                    g_eff *= min(1.0, srow["snap_pct"] / 0.9)
+            possible = cfg.season_games
+            if yr == current and current_games is not None:
+                # season in progress: weeks so far, less a bye once teams have had them
+                possible = max(1, min(cfg.season_games, current_games - (1 if current_games >= 9 else 0)))
+                if current_games < 4:
+                    continue                                              # too early to say anything
+            pt_num += w * min(g_eff, possible)
+            pt_den += w * possible
+        for i, w in enumerate(pc.recency):
             srow = ss.get(current - i)
             if not srow or not srow["games"]:
                 continue
             ppg = srow["ppg"]
             if srow.get("xppg") is not None:
-                ppg = cfg.actual_vs_expected * ppg + (1 - cfg.actual_vs_expected) * srow["xppg"]
+                ppg = pc.actual_vs_expected * ppg + (1 - pc.actual_vs_expected) * srow["xppg"]
+            if i == 0 and pc.late_weight and srow.get("ppg_late") is not None:
+                ppg = (1 - pc.late_weight) * ppg + pc.late_weight * srow["ppg_late"]   # current role
             a_then = age_on(bd, current - i)
             ppg *= age_factor(curves, pos, a_then, age_now) if a_then is not None else 1.0
             num += w * srow["games"] * ppg
             den += w * srow["games"]
             games_hist += srow["games"]
         young = nfl_year <= 3
-        pw = cfg.prior_games * (1.0 if young else cfg.vet_prior_share)
-        talent = (num + pw * prior_ppg) / (den + pw) if (den + pw) else 0.0
+        pw = pc.prior_games * (1.0 if young else pc.vet_prior_share)
+        rw = pc.regress_games if den > 0 else 0.0
+        target = pos_mean.get(pos, prior_ppg)
+        talent = (num + pw * prior_ppg + rw * target) / (den + pw + rw) if (den + pw + rw) else 0.0
 
         def growth(n_from: int, n_to: int) -> float:
             """Typical PPG change for this draft range between NFL years (years 1-3 only)."""
@@ -371,12 +475,41 @@ def project(players: list[dict], seasons: list[dict], curves: dict, prior: dict,
         proj[pid] = {
             "player_id": pid, "gsis_id": g, "position": pos, "name": p.get("name"),
             "age": round(age_now, 1) if age_now else None, "nfl_year": nfl_year,
-            "draft_bucket": bucket, "games_history": games_hist,
+            "draft_bucket": bucket, "draft_pick": d["pick"] if d else None, "games_history": games_hist,
             "prior_ppg": round(prior_ppg, 2), "talent_ppg": round(talent, 2),
+            "play_share": round((pt_num + cfg.play_shrink * cfg.season_games * cfg.availability)
+                                / (pt_den + cfg.play_shrink * cfg.season_games), 3),
             "ppg_ros": round(talent, 2), "ppg_y1": round(at(1), 2),
             "ppg_y2": round(at(2), 2), "ppg_y3": round(at(3), 2),
         }
     return proj
+
+
+def availability(v: dict, offset: int, share: dict, cfg: ModelConfig) -> float:
+    """Share of games a player is expected to play. Young players with little NFL history play as
+    often as their draft range typically does (busts and depth players play less)."""
+    if cfg.play_from_history and v.get("play_share") is not None and v["games_history"] >= 10:
+        return min(cfg.availability, v["play_share"]) if cfg.play_cap else v["play_share"]
+    if not cfg.prior_per_game or v["nfl_year"] > 3 or v["games_history"] >= 10:
+        return cfg.availability
+    n = min(max(v["nfl_year"] + offset, 1), 3)
+    sh = share.get((v["position"], v["draft_bucket"], n))
+    if cfg.prior_curve and (v["position"], "CURVE", n) in share:
+        sh = curve_at(share[(v["position"], "CURVE", n)], v.get("draft_pick"), lo=0.02, hi=1.0)
+    return min(cfg.availability, sh) if sh is not None else cfg.availability
+
+
+def value_parts(v: dict, repl: float, share: dict, cfg: ModelConfig, games_left: int) -> list[float]:
+    """Expected points above replacement, undiscounted: [rest of this season, +1, +2, +3 seasons].
+    The projection is treated as a range (wider for young players and later seasons), so a player
+    near replacement level still has upside value."""
+    scale = cfg.young_uncertainty_scale if (v["nfl_year"] <= 1 and v["games_history"] < 17) else cfg.uncertainty_scale
+    cv0 = uncertainty(v["games_history"]) * scale
+    keys = ("ppg_ros", "ppg_y1", "ppg_y2", "ppg_y3")
+    games = (games_left,) + (cfg.season_games,) * 3
+    k_pos = (cfg.position_scale or {}).get(v["position"], 1.0)
+    return [k_pos * games[i] * availability(v, i, share, cfg)
+            * expected_excess(v[k], (cv0 + 0.06 * i * scale) * v[k], repl) for i, k in enumerate(keys)]
 
 
 def build(store: Store, cfg: ModelConfig | None = None) -> dict:
@@ -452,7 +585,9 @@ def build(store: Store, cfg: ModelConfig | None = None) -> dict:
         for pos, c in curves.items() for age, m in sorted(c.items())
     ])
     store.write_frame("draft_prior", [
-        {"position": k[0], "bucket": k[1], "nfl_year": k[2], "ppg": v} for k, v in sorted(prior.items())
+        {"position": k[0], "bucket": k[1], "nfl_year": k[2],
+         "ppg": v if not isinstance(v, tuple) else None,
+         "curve": json.dumps(v) if isinstance(v, tuple) else None} for k, v in sorted(prior.items())
     ])
 
     players = []
@@ -471,39 +606,18 @@ def build(store: Store, cfg: ModelConfig | None = None) -> dict:
             "birth": (birth.get(g) if g else None) or sleeper_birth.get(pid),
             "draft": (draft_by_gsis.get(g) if g else None) or draft_by_sleeper.get(pid),
         })
-    proj = project(players, seasons, curves, prior, current, cfg)
+    proj = project(players, seasons, curves, prior, current, cfg,
+                   current_games=last_leg if state.get("season_type") == "regular" else None)
 
     repl, starters = replacement_levels(
         {k: (v["position"], v["ppg_y1"]) for k, v in proj.items()},
         roster_positions, cfg.teams, cfg.replacement_depth,
     )
-    games_full = cfg.season_games * cfg.availability
-    games_ros = remaining * cfg.availability
-    def avail(v: dict, offset: int) -> float:
-        """Share of games a player is expected to play. Young players with little NFL history
-        play as often as their draft range typically does (busts and depth players play less)."""
-        if not cfg.prior_per_game or v["nfl_year"] > 3 or v["games_history"] >= 10:
-            return cfg.availability
-        n = min(max(v["nfl_year"] + offset, 1), 3)
-        sh = share.get((v["position"], v["draft_bucket"], n))
-        return min(cfg.availability, sh) if sh is not None else cfg.availability
-
     for v in proj.values():
-        r = repl.get(v["position"], 0.0)
-        cv0 = uncertainty(v["games_history"])
-        parts = [
-            cfg.discounts[0] * games_ros / cfg.availability * avail(v, 0)
-            * expected_excess(v["ppg_ros"], cv0 * v["ppg_ros"], r),
-            cfg.discounts[1] * games_full / cfg.availability * avail(v, 1)
-            * expected_excess(v["ppg_y1"], (cv0 + 0.06) * v["ppg_y1"], r),
-            cfg.discounts[2] * games_full / cfg.availability * avail(v, 2)
-            * expected_excess(v["ppg_y2"], (cv0 + 0.12) * v["ppg_y2"], r),
-            cfg.discounts[3] * games_full / cfg.availability * avail(v, 3)
-            * expected_excess(v["ppg_y3"], (cv0 + 0.18) * v["ppg_y3"], r),
-        ]
-        v["repl_ppg"] = round(r, 2)
-        v["model_value"] = round(sum(parts), 1)
-        v["model_value_now"] = round(parts[0] + parts[1], 1)
+        parts = value_parts(v, repl.get(v["position"], 0.0), share, cfg, remaining)
+        v["repl_ppg"] = round(repl.get(v["position"], 0.0), 2)
+        v["model_value"] = round(sum(cfg.discounts[i] * x for i, x in enumerate(parts)), 1)
+        v["model_value_now"] = round(cfg.discounts[0] * parts[0] + cfg.discounts[1] * parts[1], 1)
 
     store.write_frame("player_projection", list(proj.values()))
     store.commit()
