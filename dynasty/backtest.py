@@ -80,9 +80,34 @@ def make_bundle(store) -> dict:
             birth.setdefault(r["gsis_id"], d.isoformat())
         if r["full_name"]:
             names.setdefault(r["gsis_id"], r["full_name"])
+    # weekly rows, columnar (for noise floors, usage and availability features)
+    wk_cols = ("gsis_id", "season", "week", "team", "pts", "targets", "rush_att", "rec_yd", "target_share",
+               "air_yards_share", "wopr", "snap_pct", "xfp")
+    weeks = {c: [] for c in wk_cols}
+    if model._exists(store, "player_week"):
+        have = model._cols(store, "player_week")
+        use = [c for c in wk_cols if c in have]
+        for r in store.query(f"SELECT {', '.join(use)} FROM player_week WHERE position IN ('QB','RB','WR','TE')"):
+            for c in wk_cols:
+                v = r[c] if c in use else None
+                weeks[c].append(round(v, 3) if isinstance(v, float) else v)
+    # combine measurements joined to gsis ids through the draft picks' pfr ids
+    combine = []
+    if model._exists(store, "nfl_combine") and model._exists(store, "nfl_draft_picks"):
+        cc, dc = model._cols(store, "nfl_combine"), model._cols(store, "nfl_draft_picks")
+        if "pfr_id" in cc and "pfr_player_id" in dc and "gsis_id" in dc:
+            pfr = {r["p"]: r["g"] for r in store.query(
+                "SELECT pfr_player_id p, gsis_id g FROM nfl_draft_picks WHERE gsis_id IS NOT NULL AND pfr_player_id IS NOT NULL")}
+            keep = [c for c in ("season", "pos", "ht", "wt", "forty", "vertical", "broad_jump", "cone", "shuttle", "bench")
+                    if c in cc]
+            for r in store.query(f"SELECT pfr_id, {', '.join(keep)} FROM nfl_combine"):
+                g = pfr.get(r["pfr_id"])
+                if g:
+                    combine.append({"gsis_id": g, **{c: r[c] for c in keep}})
     lg = store.query("SELECT season FROM league_season WHERE is_current=1")
     return {"made": date.today().isoformat(), "current_season": int(lg[0]["season"]) if lg else None,
-            "seasons": seasons, "picks": picks, "birth": birth, "names": names}
+            "seasons": seasons, "picks": picks, "birth": birth, "names": names, "weeks": weeks,
+            "combine": combine}
 
 
 def save_bundle(bundle: dict, path: str) -> None:
