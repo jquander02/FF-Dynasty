@@ -22,7 +22,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write   # for the site-data snapshot branch
   pages: write
   id-token: write
 
@@ -117,6 +117,17 @@ jobs:
           path: data/dynasty.db.gz
           retention-days: 7
           if-no-files-found: ignore
+
+      # A single-commit branch with the exported JSON, for debugging and previews.
+      - name: Snapshot data to site-data branch
+        if: success()
+        run: |
+          cd site/data
+          git init -q -b site-data
+          git add .
+          git -c user.name="refresh-bot" -c user.email="refresh-bot@users.noreply.github.com" commit -qm "Data snapshot $(date -u +%FT%TZ)"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" site-data
+          rm -rf .git
 
       # Publishes site/ (app + freshly exported data) to GitHub Pages.
       - name: Configure Pages

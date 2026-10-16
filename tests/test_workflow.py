@@ -14,7 +14,7 @@ class WorkflowTest(unittest.TestCase):
 
     def test_database_round_trip(self):
         order = ["Restore database", "Unpack database", "Refresh data", "Pack database", "Save database",
-                 "Deploy to GitHub Pages"]
+                 "Snapshot data to site-data branch", "Deploy to GitHub Pages"]
         for name in order:
             self.assertIn(name, self.steps)
         idx = [self.steps.index(n) for n in order]
