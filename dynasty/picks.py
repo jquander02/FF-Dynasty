@@ -1,8 +1,9 @@
 """Season simulation, rookie draft order odds, and pick values.
 
-Draft order rule: linear, worst regular-season record picks first (ties broken by points
-for). `draft_rule_check` compares this rule with the league's last rookie draft and
-reports how many slots it explains, so a lottery or custom order shows up.
+Draft order rule: two candidates are checked against the league's last rookie draft and
+the better one is used: worst record picks first, or non-playoff teams by reverse record
+then playoff teams by playoff finish (champion picks last). The refresh summary reports
+how many slots each explains, so a lottery or custom order shows up.
 
 Odds:
   next draft      Monte Carlo of the rest of this regular season on Sleeper's schedule.
@@ -72,9 +73,48 @@ def kdef_weekly(store: Store, league_id: str) -> float:
     return 15.0
 
 
+def playoff_places(seeds: list, mean: dict, sd: float, rng: random.Random) -> list:
+    """Single-elimination playoff (top seeds get byes). Returns teams in finishing order 1..k.
+    Supports 4, 6 or 8 teams; places 5+ go to first-round losers by seed (6-team: 5th-place game)."""
+    k = len(seeds)
+
+    def game(a, b):
+        return (a, b) if rng.gauss(mean[a], sd) >= rng.gauss(mean[b], sd) else (b, a)
+
+    if k == 6:
+        w1, l1 = game(seeds[2], seeds[5])
+        w2, l2 = game(seeds[3], seeds[4])
+        low, high = sorted([w1, w2], key=seeds.index)[::-1], None
+        sw1, sl1 = game(seeds[0], low[0])
+        sw2, sl2 = game(seeds[1], low[1])
+        champ, runner = game(sw1, sw2)
+        third, fourth = game(sl1, sl2)
+        fifth, sixth = game(l1, l2)
+        return [champ, runner, third, fourth, fifth, sixth]
+    if k in (4, 8):
+        rnd = list(seeds)
+        losers_by_round = []
+        while len(rnd) > 2:
+            nxt, lost = [], []
+            for i in range(len(rnd) // 2):
+                w, l = game(rnd[i], rnd[-1 - i])
+                nxt.append(w)
+                lost.append(l)
+            losers_by_round.append(sorted(lost, key=seeds.index))
+            rnd = sorted(nxt, key=seeds.index)
+        champ, runner = game(rnd[0], rnd[1])
+        semis = losers_by_round[-1]
+        third, fourth = game(semis[0], semis[1])
+        rest = [t for grp in reversed(losers_by_round[:-1]) for t in grp]
+        return [champ, runner, third, fourth] + rest
+    return list(seeds)
+
+
 def simulate_season(teams: dict, schedule: dict, weeks: list[int], sd: float, playoff_teams: int,
-                    sims: int = SIMS, seed: int = 7) -> dict:
+                    sims: int = SIMS, seed: int = 7, rule: str = "reverse_standings") -> dict:
     """teams: rid -> {wins, ties, pf, mean}. schedule: week -> [(a, b), ...].
+    rule: 'reverse_standings' (worst record picks 1st) or 'playoff_finish' (non-playoff teams by
+    reverse record, then playoff teams by finish, champion last).
     Returns rid -> {slot_counts, playoffs, wins_total}."""
     rng = random.Random(seed)
     rids = list(teams)
@@ -99,10 +139,16 @@ def simulate_season(teams: dict, schedule: dict, weeks: list[int], sd: float, pl
                 elif sb > sa:
                     wins[b] += 1
         standing = sorted(rids, key=lambda r: (wins[r], pf[r]), reverse=True)
+        if rule == "playoff_finish" and 0 < playoff_teams < n:
+            means = {r: teams[r]["mean"] for r in rids}
+            order = playoff_places(standing[:playoff_teams], means, sd, rng) + standing[playoff_teams:]
+        else:
+            order = standing
+        for i, rid in enumerate(order):
+            out[rid]["slots"][n - i] += 1  # last in the order picks 1st
         for i, rid in enumerate(standing):
             if i < playoff_teams:
                 out[rid]["playoffs"] += 1
-            out[rid]["slots"][n - i] += 1  # last place picks 1st
             out[rid]["wins"] += wins[rid]
     return out
 
@@ -120,24 +166,49 @@ def strength_slots(strength: dict, noise: float, sims: int = SIMS, seed: int = 1
     return out
 
 
+def bracket_places(store: Store, league_id: str) -> dict:
+    """roster_id -> final playoff place, from the winners bracket's placement games."""
+    places = {}
+    for r in store.query("SELECT winner, loser, place FROM bracket WHERE league_id=? AND bracket='winners' "
+                         "AND place IS NOT NULL", (league_id,)):
+        if r["winner"]:
+            places[r["winner"]] = r["place"]
+        if r["loser"]:
+            places[r["loser"]] = r["place"] + 1
+    return places
+
+
 def draft_rule_check(store: Store) -> dict:
-    """How many slots of the last rookie draft match reverse prior-season standings."""
+    """Which draft-order rule explains the league's last rookie draft best."""
     d = store.query(
         "SELECT * FROM draft WHERE player_type=1 AND status='complete' ORDER BY season DESC LIMIT 1"
     )
     if not d:
         return {}
     d = d[0]
-    prev = store.query("SELECT league_id FROM league_season WHERE CAST(season AS INTEGER)=?",
+    prev = store.query("SELECT league_id, playoff_teams FROM league_season WHERE CAST(season AS INTEGER)=?",
                        (int(d["season"]) - 1,))
     order = json.loads(d["draft_order"] or "{}")
     if not prev or not order:
         return {}
-    rows = store.query("SELECT owner_id, wins, ties, fpts FROM roster WHERE league_id=?", (prev[0]["league_id"],))
-    standing = sorted(rows, key=lambda r: ((r["wins"] or 0) + 0.5 * (r["ties"] or 0), r["fpts"] or 0))
-    expected = {r["owner_id"]: i + 1 for i, r in enumerate(standing)}
-    match = sum(1 for uid, slot in order.items() if expected.get(uid) == slot)
-    return {"draft_season": d["season"], "slots_matching_reverse_standings": match, "slots": len(order)}
+    plid, pt = prev[0]["league_id"], prev[0]["playoff_teams"] or 0
+    rows = store.query("SELECT roster_id, owner_id, wins, ties, fpts FROM roster WHERE league_id=?", (plid,))
+    worst_first = sorted(rows, key=lambda r: ((r["wins"] or 0) + 0.5 * (r["ties"] or 0), r["fpts"] or 0))
+    n = len(rows)
+    a = {r["owner_id"]: i + 1 for i, r in enumerate(worst_first)}
+    places = bracket_places(store, plid)
+    b = {}
+    non_playoff = worst_first[: n - pt] if pt else worst_first
+    for i, r in enumerate(non_playoff):
+        b[r["owner_id"]] = i + 1
+    for r in rows:
+        if r["roster_id"] in places:
+            b[r["owner_id"]] = n - places[r["roster_id"]] + 1
+    ma = sum(1 for uid, slot in order.items() if a.get(uid) == slot)
+    mb = sum(1 for uid, slot in order.items() if b.get(uid) == slot) if places else -1
+    best = "playoff_finish" if mb > ma else "reverse_standings"
+    return {"draft_season": d["season"], "slots": len(order), "matches_reverse_standings": ma,
+            "matches_playoff_finish": mb, "rule": best}
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +337,9 @@ def build(store: Store, weights: dict | None = None) -> dict:
             schedule[r["week"]].append((mates[0], mates[1]))
         seen.add(key)
     weeks = list(range(scored + 1, last_reg + 1))
-    sim = simulate_season(teams, schedule, weeks, sd, playoff_teams) if teams else {}
+    check = draft_rule_check(store)
+    rule = check.get("rule", "playoff_finish")
+    sim = simulate_season(teams, schedule, weeks, sd, playoff_teams, rule=rule) if teams else {}
 
     sims = sum(sim[next(iter(sim))]["slots"]) if sim else 1
     store.write_frame("season_sim", [
@@ -360,5 +433,5 @@ def build(store: Store, weights: dict | None = None) -> dict:
         "simulated_weeks": len(weeks), "schedule_weeks": len(schedule), "team_sd": round(sd, 1),
         "kdef_weekly": round(kdef, 1), "pick_curve": bool(curve), "picks_valued": len(rows),
         "market_pick_rows": sum(len(v) for v in mk.values()),
-        "draft_rule_check": draft_rule_check(store),
+        "draft_rule": check,
     }

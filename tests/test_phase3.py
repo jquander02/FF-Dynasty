@@ -31,6 +31,18 @@ class PiecesTest(unittest.TestCase):
         self.assertGreater(out[4]["playoffs"] / 2000, 0.99)
         self.assertEqual(sum(teams_out[2]["slots"]), 2000)
 
+    def test_playoff_finish_rule(self):
+        import random
+        t = {r: {"wins": 0, "ties": 0, "pf": 0, "mean": 100 + 10 * r} for r in range(1, 13)}
+        out = picks.simulate_season(t, {}, [1], 1.0, 6, sims=500, rule="playoff_finish")
+        # strongest team nearly always champion -> picks last; the 12th slot is a playoff team
+        self.assertGreater(out[12]["slots"][12] / 500, 0.9)
+        # non-playoff teams only ever pick 1-6
+        self.assertEqual(sum(out[1]["slots"][7:]), 0)
+        places = picks.playoff_places([1, 2, 3, 4, 5, 6], {i: 200 - i for i in range(1, 7)}, 0.01, random.Random(1))
+        self.assertEqual(places[:2], [1, 2])
+        self.assertEqual(sorted(places), [1, 2, 3, 4, 5, 6])
+
     def test_strength_slots(self):
         out = picks.strength_slots({1: 100, 2: 120, 3: 140}, noise=5, sims=2000)
         self.assertGreater(out[1][1], out[3][1])
@@ -105,7 +117,8 @@ class Phase3PipelineTest(ValuePipelineTest):
         # no market value for 2028 in the fixture and no league curve (only 2 rookie picks) -> 0
         later = [r for r in rows if r["season"] == "2028"]
         self.assertTrue(all(r["value"] == 0 for r in later))
-        self.assertEqual(self.pk["draft_rule_check"]["slots"], 12)
+        self.assertEqual(self.pk["draft_rule"]["slots"], 12)
+        self.assertIn(self.pk["draft_rule"]["rule"], ("reverse_standings", "playoff_finish"))
 
     def test_plan_and_export(self):
         plan = planner.build(self.store)
