@@ -417,3 +417,30 @@ button.past-row:focus-visible { outline: 2px solid var(--turf); outline-offset: 
   .tsides { grid-template-columns: repeat(var(--n, 2), minmax(0, 1fr)); }
   .tside + .tside { border-top: 0; border-left: 1px solid var(--line); }
 }
+
+/* ---------- plan ---------- */
+.strategy { background: var(--turf); color: var(--on-turf); border-radius: var(--r-group); padding: 16px 16px 14px; margin-bottom: 12px; }
+.strategy .who { margin: 0 0 4px; font-size: 13px; opacity: 0.85; }
+.strategy .who .user, .strategy .who .win { color: inherit; opacity: 0.85; }
+.strategy h2 { font: 800 34px/1 var(--display); letter-spacing: 0.01em; margin: 2px 0 8px; color: inherit; }
+.strategy .lede { color: inherit; margin: 0 0 8px; }
+.strategy .why { margin: 0; padding-left: 18px; font-size: 13px; opacity: 0.9; }
+.strategy .why li + li { margin-top: 2px; }
+.years { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 900px) { .years { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.ycard { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-group); padding: 12px 14px; }
+.ycard header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.ycard h3 { font: 800 24px/1 var(--display); margin: 0; }
+.ycard h3 .muted { font: 500 12px var(--body); }
+.goal { font: 800 14px/1 var(--display); letter-spacing: 0.03em; padding: 5px 8px 4px; border-radius: 6px; white-space: nowrap; }
+.goal.g-title { background: var(--marker); color: #1a1a1a; }
+.goal.g-win { background: color-mix(in srgb, var(--good) 15%, transparent); color: var(--good); }
+.goal.g-push { background: color-mix(in srgb, var(--pos-te) 18%, transparent); color: var(--pos-te); }
+.goal.g-build { background: color-mix(in srgb, var(--pos-wr) 15%, transparent); color: var(--pos-wr); }
+.goal.g-sell { background: color-mix(in srgb, var(--muted) 15%, transparent); color: var(--muted); }
+.yrank { font-size: 13.5px; margin: 8px 0 6px; }
+.moves { margin: 0 0 8px; padding-left: 18px; font-size: 14px; }
+.moves li + li { margin-top: 5px; }
+.yfacts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 10px; margin: 8px 0 0; font-size: 12.5px; border-top: 1px solid var(--line); padding-top: 8px; }
+.yfacts dt { color: var(--muted); font-weight: 600; }
+.yfacts dd { margin: 0; }

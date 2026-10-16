@@ -123,11 +123,21 @@ class Phase3PipelineTest(ValuePipelineTest):
     def test_plan_and_export(self):
         plan = planner.build(self.store)
         self.assertEqual(plan["roster_id"], MY_ROSTER)
-        sell = {s["name"]: s for s in plan["sell"]}
-        self.assertIn("Christian McCaffrey", sell)   # 30-year-old RB past the cliff
-        self.assertTrue(sell["Christian McCaffrey"]["past_cliff"])
-        self.assertIn("Rookie Unknown", [c["name"] for c in plan["core"]])
-        self.assertTrue(any(p["season"] == "2028" and p["round"] == 2 for p in plan["my_picks"]))  # via roster 9
+        # the only roster with projected players has the best lineup in every season
+        self.assertEqual(plan["ranks"], {"rank_now": 1, "rank_next": 1, "rank_later": 1})
+        st = plan["strategy"]
+        self.assertIn(st["key"], ("sustain", "climb", "next", "deadline", "reload"))
+        self.assertTrue(st["title"] and st["summary"] and len(st["why"]) == 3)
+        self.assertEqual([y["season"] for y in plan["years"]], [2026, 2027, 2028])
+        for y in plan["years"]:
+            self.assertTrue(y["goal"])
+            self.assertEqual(y["rank"], 1)
+            self.assertIsInstance(y["moves"], list)
+        self.assertTrue(any(d["round"] == 2 for d in plan["years"][2]["draft"]))  # 2028 2nd via roster 9
+        self.assertTrue(any(p["season"] == "2028" and p["round"] == 2 for p in plan["my_picks"]))
+        # nothing is both kept and sold
+        self.assertFalse({c["id"] for c in plan["keep"]} & {c["id"] for c in plan["sell"]})
+        self.assertIn("Rookie Unknown", [c["name"] for c in plan["keep"]] + [c["name"] for c in plan["sell"]])
         site = self.tmp / "site"
         export.run(self.store, site)
         d = site / "data"
@@ -138,6 +148,39 @@ class Phase3PipelineTest(ValuePipelineTest):
         self.assertTrue(all("window" in t for t in teams_json))
         pj = json.loads((d / "picks.json").read_text())
         self.assertIn("p_top3", pj[0])
+
+
+class StrategyTest(unittest.TestCase):
+    """Strategy rules on synthetic teams: (playoff odds, lineup ranks now / next / in two seasons)."""
+
+    def pick(self, p, ranks):
+        lg = planner.League.__new__(planner.League)
+        lg.n, lg.rank, lg.sim = 12, {1: list(ranks)}, {1: {"p_playoffs": p, "p_title": 0.1}}
+        return lg._strategy(1)
+
+    def test_strategies(self):
+        cases = [
+            ((0.95, (1, 2, 3)), "sustain", 0),
+            ((0.90, (2, 6, 10)), "allin", 0),
+            ((0.85, (6, 6, 4)), "climb", 2),
+            ((0.61, (7, 11, 12)), "run", 0),
+            ((0.35, (6, 2, 3)), "next", 1),
+            ((0.40, (5, 7, 7)), "deadline", 0),
+            ((0.01, (9, 3, 2)), "reload", 1),
+            ((0.01, (10, 7, 3)), "reload", 2),
+            ((0.04, (10, 10, 11)), "rebuild", 2),
+        ]
+        for (p, ranks), key, target in cases:
+            got = self.pick(p, ranks)
+            self.assertEqual((got["key"], got["target"]), (key, target), (p, ranks))
+
+    def test_lineup_slots(self):
+        players = [("q", "QB", 20), ("r1", "RB", 15), ("r2", "RB", 10), ("r3", "RB", 9),
+                   ("w1", "WR", 14), ("w2", "WR", 8), ("t", "TE", 7)]
+        slots = planner.lineup_slots(players, ["QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "BN"])
+        self.assertEqual([s["label"] for s in slots], ["QB1", "RB1", "RB2", "WR1", "WR2", "TE1", "FLEX"])
+        self.assertEqual(slots[-1]["pid"], "r3")
+        self.assertAlmostEqual(sum(s["ppg"] for s in slots), teams.best_lineup(players, ["QB", "RB", "RB", "WR", "WR", "TE", "FLEX"])[0])
 
 
 if __name__ == "__main__":

@@ -115,11 +115,11 @@ def simulate_season(teams: dict, schedule: dict, weeks: list[int], sd: float, pl
     """teams: rid -> {wins, ties, pf, mean}. schedule: week -> [(a, b), ...].
     rule: 'reverse_standings' (worst record picks 1st) or 'playoff_finish' (non-playoff teams by
     reverse record, then playoff teams by finish, champion last).
-    Returns rid -> {slot_counts, playoffs, wins_total}."""
+    Returns rid -> {slots (draft slot counts), playoffs, titles, wins (total over sims)}."""
     rng = random.Random(seed)
     rids = list(teams)
     n = len(rids)
-    out = {rid: {"slots": [0] * (n + 1), "playoffs": 0, "wins": 0.0} for rid in rids}
+    out = {rid: {"slots": [0] * (n + 1), "playoffs": 0, "titles": 0, "wins": 0.0} for rid in rids}
     for _ in range(sims):
         wins = {rid: teams[rid]["wins"] + 0.5 * teams[rid]["ties"] for rid in rids}
         pf = {rid: teams[rid]["pf"] for rid in rids}
@@ -139,9 +139,14 @@ def simulate_season(teams: dict, schedule: dict, weeks: list[int], sd: float, pl
                 elif sb > sa:
                     wins[b] += 1
         standing = sorted(rids, key=lambda r: (wins[r], pf[r]), reverse=True)
+        means = {r: teams[r]["mean"] for r in rids}
+        if 0 < playoff_teams < n:
+            places = playoff_places(standing[:playoff_teams], means, sd, rng)
+            out[places[0]]["titles"] += 1
+        else:
+            places = standing
         if rule == "playoff_finish" and 0 < playoff_teams < n:
-            means = {r: teams[r]["mean"] for r in rids}
-            order = playoff_places(standing[:playoff_teams], means, sd, rng) + standing[playoff_teams:]
+            order = places + standing[playoff_teams:]
         else:
             order = standing
         for i, rid in enumerate(order):
@@ -345,6 +350,7 @@ def build(store: Store, weights: dict | None = None) -> dict:
     store.write_frame("season_sim", [
         {"roster_id": rid, "mean_weekly": round(teams[rid]["mean"], 1),
          "exp_wins": round(s["wins"] / sims, 2), "p_playoffs": round(s["playoffs"] / sims, 3),
+         "p_title": round(s["titles"] / sims, 3),
          "p_first_pick": round(s["slots"][1] / sims, 3), "p_top3": round(sum(s["slots"][1:4]) / sims, 3),
          "exp_slot": round(sum(i * c for i, c in enumerate(s["slots"])) / sims, 2)}
         for rid, s in sim.items()

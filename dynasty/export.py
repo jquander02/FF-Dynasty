@@ -144,6 +144,7 @@ def run(store: Store, site_dir: Path) -> dict[str, int]:
                 "pick_value": w.get("pick_value"),
                 "total_assets": w.get("total_assets"),
                 "p_playoffs": s_.get("p_playoffs"),
+                "p_title": s_.get("p_title"),
                 "exp_wins": s_.get("exp_wins"),
                 "p_first_pick": s_.get("p_first_pick"),
             })

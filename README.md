@@ -20,9 +20,13 @@ that column (tap again to reverse); player and pick lists have a "Sort by" menu.
 - **Values:** every player ranked by dynasty value; search, filter by position and team, sort
   by value, age, projection, points per game or 7-day change
 - **Picks:** every 2027–2029 pick with its projected slot, top-3 odds and value; filter by team
-- **Plan:** a planner for any team: draft odds with a chart of where its next first lands, who
-  to sell before their age cliff (and which contenders they'd start for), young buy targets on
-  other teams' benches, and its young core
+- **Plan:** the best way forward for any team. A strategy (Stay on top, Push for the title,
+  Compete now and peak later, Make a run then retool, Build for next season, Decide at the
+  deadline, Reload, Rebuild) with the reasons behind it, then a three-season plan for 2026, 2027
+  and 2028: the goal for each season, where the lineup ranks as it stands, weak spots and
+  strengths against the league's median starter, players aging out and stepping up, that
+  year's draft picks, and the moves to make. Plus targets to buy for the target season, what
+  to sell (or, for contenders, trade chips to spend), and who to build around
 - **Trade:** pick Team A and Team B, tick players and picks on both sides, and see both sides'
   value and how each team's best lineup changes now, next year and in two years; suggested
   fair trades for every team; both managers' profiles. A bar at the bottom keeps the running
@@ -76,10 +80,13 @@ Tables: `player_week`, `player_season`, `age_curve`, `draft_prior`, `player_proj
 - **Pick value:** 60% from what this league's past rookie picks are worth now at each
   overall pick (fitted curve, discounted 10% per year out), 40% from FantasyCalc and
   DynastyProcess pick values; averaged over the slot odds.
-- **Plan (built for every team):** sell candidates are the team's veterans at their position's age cliff (QB 32, RB 26,
-  WR 28, TE 29) or projected to drop 15%+ in two seasons, with the contenders whose lineup
-  they'd upgrade most; buy targets are players 24 or younger outside their team's best
-  lineup, contenders' benches first.
+- **Plan (built for every team):** the strategy comes from playoff and title odds this season
+  and the team's lineup rank now, next season and in two seasons. Each strategy has a target
+  season. Buy targets would start for the team in that season and aren't needed by their own
+  team then (veterans on rebuilding teams, bench players on contenders; building teams' young
+  cores are off-limits). Sells are players who won't help in the target season (age cliff: QB
+  32, RB 26, WR 28, TE 29; falling projection; or not good enough), shown with the teams
+  they'd start for. Season cards compare each starting spot with the league median.
 
 Tables: `schedule`, `team_window`, `season_sim`, `pick_value`. Quick refreshes on game days
 redo windows, odds and pick values with the latest scores.

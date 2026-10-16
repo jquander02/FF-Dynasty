@@ -406,40 +406,84 @@
     const ppg = c.ppg_now != null ? `${f1(c.ppg_now)} → ${f1(c.ppg_2y)} ppg in 2 yrs` : "";
     return playerRow(p, [esc(c.nfl || "FA"), c.age != null ? `age ${c.age}` : "", ppg, lean({ model: c.model, market: c.market })], { sub: "value" }, lines);
   }
+  const GOAL_CLS = { "Win the title": "g-title", Contend: "g-win", "Aim to contend": "g-win", "Make the playoffs": "g-push",
+    "Push or sell": "g-push", Build: "g-build", Develop: "g-build", "Sell and reload": "g-sell", "Sell and collect": "g-sell", Retool: "g-sell" };
+  const SELLING = new Set(["reload", "rebuild"]);
+  function yearCard(y, i) {
+    const label = i === 0 ? `${y.season} <span class="muted">rest of season</span>` : `${y.season}`;
+    const gap = (x) => `<span class="${signCls(x.gap)}">${x.gap > 0 ? "+" : ""}${f1(x.gap)}</span>`;
+    const spot = (x) => `${esc(x.slot)} ${x.name ? `<span class="muted">${esc(x.name)}</span> ` : ""}${gap(x)}`;
+    return `
+      <section class="ycard">
+        <header><h3>${label}</h3><span class="goal ${GOAL_CLS[y.goal] || ""}">${esc(y.goal)}</span></header>
+        <p class="yrank">Lineup ranks <b>${ordinal(y.rank)}</b> as the roster stands <span class="muted">(${f1(y.strength)} ppg; league median ${f1(y.median_strength)})</span></p>
+        ${y.moves.length ? `<ul class="moves">${y.moves.map((m) => `<li>${esc(m)}</li>`).join("")}</ul>` : ""}
+        <dl class="yfacts">
+          ${y.holes.length ? `<dt>Weak spots</dt><dd>${y.holes.map(spot).join("; ")}</dd>` : ""}
+          ${y.strong.length ? `<dt>Strengths</dt><dd>${y.strong.map(spot).join("; ")}</dd>` : ""}
+          ${y.draft.length ? `<dt>${y.season} draft</dt><dd>${y.draft.map((d) => `${d.exp_slot ? slotLabel(d.round, d.exp_slot) : `Rd ${d.round}`}${d.own ? "" : ` <span class="muted">from ${esc(d.from)}</span>`}`).join(", ")}</dd>` : ""}
+        </dl>
+      </section>`;
+  }
   function renderPlan() {
     const rid = focusTeam();
     const P = (D.plan || {})[rid];
     const t = teamOf(rid);
-    if (!P || !P.roster_id) return `${teamPicker()}<div class="empty"><b>No plan yet</b>Plans fill in after the next full refresh.</div>`;
+    if (!P || !P.roster_id || !P.strategy) return `${teamPicker()}<div class="empty"><b>No plan yet</b>Plans fill in after the next full refresh.</div>`;
+    const S = P.strategy;
+    const selling = SELLING.has(S.key);
     const firstSeason = Math.min(...(D.picks || []).map((p) => Number(p.season)));
     const ownFirst = (D.picks || []).find((p) => p.owner === rid && p.round === 1 && Number(p.season) === firstSeason && p.odds?.length);
-    const firsts = (P.my_picks || []).filter((p) => p.round === 1);
+    const deadline = P.weeks_to_deadline ? `Deadline in ${plural(P.weeks_to_deadline, "week")}` : "Trade deadline passed";
+    const boardItems = selling
+      ? [{ v: esc(P.record), l: `${P.exp_wins ?? "–"} wins projected`, mark: true },
+         { v: pct(P.p_first_pick), l: "Chance at the 1.01" },
+         { v: P.exp_slot ? P.exp_slot.toFixed(1) : "–", l: `Projected slot, top-3 ${pct(P.p_top3)}` },
+         { v: P.weeks_to_deadline ? `Wk ${P.trade_deadline_week}` : "–", l: deadline }]
+      : [{ v: esc(P.record), l: `${P.exp_wins ?? "–"} wins projected`, mark: true },
+         { v: pct(P.p_playoffs), l: "Playoff odds" },
+         { v: pct(P.p_title), l: "Title odds" },
+         { v: P.weeks_to_deadline ? `Wk ${P.trade_deadline_week}` : "–", l: deadline }];
+    const buyTitle = S.target_season === D.meta?.season ? `Starters to add for ${S.target_season}` : `Targets for ${S.target_season}`;
+    const sellTitle = { chips: "Trade chips", shop: "Veterans to shop", sell: `Sell before ${S.target_season}` }[P.sell_kind] || "Sell";
+    const buyers = (c) => (c.buyers?.length
+      ? `Would start for ${c.buyers.map((b) => `${nameHTML(b.team)} (+${b.upgrade_ppg}${b.season !== D.meta?.season ? ` in ${b.season}` : ""})`).join(", ")}`
+      : "No team needs him as a starter right now");
     return `
       ${teamPicker()}
-      ${board([
-        { v: esc(P.record), l: `${P.exp_wins ?? "–"} wins projected`, mark: true },
-        { v: pct(P.p_first_pick), l: "Chance at the 1.01" },
-        { v: P.exp_slot ? P.exp_slot.toFixed(1) : "–", l: `Projected slot, top-3 ${pct(P.p_top3)}` },
-        { v: pct(P.p_playoffs), l: `Playoff odds, deadline in ${plural(P.weeks_to_deadline ?? 0, "week")}` },
-      ])}
-      <div class="group pad" style="margin-top:12px">
-        <p class="lede">${esc(t?.team)}${userTag(t?.owner)} ${winChip(P.window)}&nbsp; Lineup strength ranks <b>${ordinal(P.ranks.rank_now)}</b> now, <b>${ordinal(P.ranks.rank_next)}</b> next season and <b>${ordinal(P.ranks.rank_later)}</b> in two. Total value ${fmt(P.assets.total)}: ${fmt(P.assets.players)} in players and ${fmt(P.assets.picks)} in picks.</p>
-        ${ownFirst ? `<h3 style="margin-top:12px">Where their ${ownFirst.season} first lands</h3>${oddsChart(ownFirst)}<p class="note">Chance of each slot. Yellow bars are top-3 picks.</p>` : ""}
-        ${firsts.length ? `<p class="note">First-round picks: ${firsts.map((p) => `${p.season} ${p.own ? "own" : `from ${nameHTML(p.from)}`} (about ${slotLabel(1, p.exp_slot)})`).join("; ")}.</p>` : `<p class="note">No first-round picks in the next three drafts.</p>`}
+      <section class="strategy">
+        <p class="who">${esc(t?.team)}${userTag(t?.owner)} ${winChip(P.window)}</p>
+        <h2>${esc(S.title)}</h2>
+        <p class="lede">${esc(S.summary)}</p>
+        <ul class="why">${S.why.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>
+      </section>
+      ${board(boardItems)}
+      <h2>Three-season plan</h2>
+      <div class="years">${P.years.map(yearCard).join("")}</div>
+      ${selling && ownFirst ? `<div class="group pad" style="margin-top:12px"><h3>Where their ${ownFirst.season} first lands</h3>${oddsChart(ownFirst)}<p class="note">Chance of each slot. Yellow bars are top-3 picks.</p></div>` : ""}
+      <div class="cols">
+        <div>
+          <h2>${buyTitle}<span class="count">${(P.buy || []).length}</span></h2>
+          <div class="group">${(P.buy || []).map((c) => planRow(c, [esc(c.reason)])).join("") || `<div class="empty">No realistic upgrades found for ${S.target_season}.</div>`}</div>
+        </div>
+        <div>
+          <h2>${sellTitle}<span class="count">${(P.sell || []).length + (P.chips || []).length}</span></h2>
+          <div class="group">${(P.sell || []).map((c) => planRow(c, [esc(c.reason), buyers(c)])).join("")}
+            ${(P.chips || []).map((c) => `
+              <div class="pick"><span class="slot">${c.season}</span>
+                <span><span class="pname">Round ${c.round}${c.own ? "" : ` <span class="muted">from ${esc(c.from)}</span>`}</span>
+                <span class="meta"><span>${c.exp_slot ? `about ${slotLabel(c.round, c.exp_slot)}` : ""}</span><span>${esc(c.reason)}</span></span></span>
+                <span class="val"><b>${fmt(c.value)}</b></span></div>`).join("")}
+            ${!(P.sell || []).length && !(P.chips || []).length ? `<div class="empty">Nothing to move right now.</div>` : ""}
+          </div>
+        </div>
       </div>
-      <h2>Sell before the cliff<span class="count">${(P.sell || []).length}</span></h2>
-      <div class="group">${(P.sell || []).map((c) => planRow(c, [
-        [c.past_cliff ? "Past his age cliff" : "", c.projected_drop > 0 ? `projected to lose ${Math.round(c.projected_drop * 100)}% by 2028` : ""].filter(Boolean).join(", ").replace(/^p/, "P"),
-        c.buyers.length ? `Would start for ${c.buyers.map((b) => `${nameHTML(b.team)} (+${b.upgrade_ppg})`).join(", ")}` : "No team in the hunt needs him",
-      ])).join("") || `<div class="empty">No veterans worth selling right now.</div>`}</div>
-      <h2>Buy young players off benches<span class="count">${(P.buy || []).length}</span></h2>
-      <div class="group">${(P.buy || []).map((c) => planRow(c, [`On ${nameHTML(c.team)}'s bench${c.owner_window ? ` (${esc(c.owner_window.toLowerCase())})` : ""}`])).join("") || `<div class="empty">No bench targets found.</div>`}</div>
-      <h2>Young core<span class="count">${(P.core || []).length}</span></h2>
-      <div class="group">${(P.core || []).map((c) => planRow(c)).join("") || `<div class="empty">No players under 25 with value yet.</div>`}</div>
+      <h2>Build around<span class="count">${(P.keep || []).length}</span></h2>
+      <div class="group">${(P.keep || []).map((c) => planRow(c, [esc(c.reason)])).join("") || `<div class="empty">No core players yet.</div>`}</div>
       ${how("How the plan is built", [
-        `Sell: veterans at their position's age cliff (QB 32, RB 26, WR 28, TE 29) or projected to lose 15% or more within two seasons. Buyers are contenders and teams with 40%+ playoff odds whose starting lineup the player would improve; the number is points per game added.`,
-        `Buy: players 24 or younger who don't make their team's best lineup, contenders' benches first, since a contender is more willing to trade future value.`,
-        `Draft odds come from the same season simulation as the Picks tab.`,
+        `The strategy comes from this season's playoff and title odds (10,000 simulated seasons) and how the team's best possible lineup ranks now, next season and in two seasons as the roster stands. Contenders with a lasting lineup stay on top; contenders that fade push now or make a run and retool; teams that get stronger later build toward that season; teams out of the race reload or rebuild. Each strategy has a target season the plan aims at.`,
+        `Each season card compares every starting spot with the league's median starter at that spot (weak spots and strengths), lists players reaching their position's age cliff (QB 32, RB 26, WR 28, TE 29) as their projection falls, young players stepping up, and the team's picks in that year's draft.`,
+        `Targets are players who'd start for this team in the target season and who their own team doesn't need then: veterans on rebuilding teams, or bench players on contenders. Young core players on building teams are left out. Sell lists show what won't help in the target season (contenders: bench depth and distant picks to spend), with the teams each player would start for.`,
       ])}`;
   }
 
