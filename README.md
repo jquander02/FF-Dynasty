@@ -13,9 +13,12 @@ on your iPhone and Windows PC.
 - **Picks:** every 2027–2029 pick with its projected slot, top-3 odds and value
 - **Plan:** your rebuild planner: tank odds, your picks, who to sell before their age cliff
   (and which contenders need them), young buy targets on other teams' benches, your core
-- **Activity / History:** recent transactions; seasons and champions
-
-Trade lab and owner profiles come in phase 4.
+- **Trade:** pick a partner, tick players and picks on both sides, and see both sides' value
+  and how each team's best lineup changes now, next year and in two years; plus suggested
+  trades and the partner's profile
+- **Owners:** every league-mate's trading, waiver and drafting habits, and every past trade
+  judged by today's values
+- **Activity / History:** recent transactions; seasons and champions (linked from League)
 
 ## How player values work (phase 2)
 
@@ -58,6 +61,23 @@ Tables: `player_week`, `player_season`, `age_curve`, `draft_prior`, `player_proj
 
 Tables: `schedule`, `team_window`, `season_sim`, `pick_value`. Quick refreshes on game days
 redo windows, odds and pick values with the latest scores.
+
+## Trades and league-mates (phase 4)
+
+- **Trade value:** a package counts as (sum of value^1.3)^(1/1.3): one piece counts in full,
+  two equal pieces about 1.7x one. In a 12-team league the stud usually wins a 2-for-1.
+  Fair = within 10%. The app's trade lab and the Python engine (`dynasty/trade.py`) use the
+  same math.
+- **Lineup impact:** best possible starting lineup before vs after, for both teams, now
+  (injured players out), next season and in two seasons.
+- **Trade finder:** searches 1-for-1 and 2-for-1 deals with every team (your players for
+  their players or picks), keeps fair ones that fit your window and, for contenders, improve
+  their lineup now, and ranks them.
+- **Owner profiles:** trades and partners, each past trade judged by what both sides hold now,
+  positions traded for, picks bought vs sold, waiver claims and FAAB, early-round draft habits
+  here and in their other Sleeper leagues, with short tags for what stands out.
+
+Tables: `owner_profile`, `trade_review`, `trade_suggestion`.
 
 ---
 

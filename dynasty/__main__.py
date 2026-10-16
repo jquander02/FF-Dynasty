@@ -11,7 +11,7 @@ import logging
 import sys
 import time
 
-from . import export, idmap, ingest_sleeper, market, model, nflverse, picks, production, teams, values
+from . import export, idmap, ingest_sleeper, market, model, nflverse, owners, picks, production, teams, trade, values
 from .config import load_config
 from .sleeper import SleeperClient
 from .store import Store
@@ -44,7 +44,8 @@ def main(argv: list[str] | None = None) -> int:
                 n = store.query(f"SELECT COUNT(*) c FROM {k}")[0]["c"]
                 print(f"{k:18} {n:>8}")
             for k in ("market_value", "player_week", "player_season", "player_projection", "player_value",
-                      "team_window", "season_sim", "pick_value", "schedule"):
+                      "team_window", "season_sim", "pick_value", "schedule", "owner_profile",
+                      "trade_review", "trade_suggestion"):
                 if store.query("SELECT 1 FROM sqlite_master WHERE name=?", (k,)):
                     print(f"{k:18} {store.query(f'SELECT COUNT(*) c FROM {k}')[0]['c']:>8}")
             nfl = store.query("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'nfl_%'")
@@ -91,6 +92,11 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Teams: {len(tw)} windows")
                 pk = picks.build(store, cfg.value_weights)
                 print("Picks: " + ", ".join(f"{k} {v}" for k, v in pk.items()))
+                ow = owners.build(store)
+                print("Owners: " + ", ".join(f"{k} {v}" for k, v in ow.items()))
+                if res.my_roster_id:
+                    sug = trade.find_trades(store, res.my_roster_id)
+                    print(f"Trade finder: {len(sug)} suggestions" + (f", top: give {sug[0]['give_label']} for {sug[0]['get_label']} ({sug[0]['partner_team']})" if sug else ""))
 
         if args.command == "refresh" and not args.quick:
             store.commit()

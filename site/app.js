@@ -10,6 +10,9 @@
   let valPos = "ALL";
   let valScope = "all";
   let valLimit = 100;
+  let tradePartner = null;
+  const give = new Set();
+  const get = new Set();
 
   const esc = (s) =>
     String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -20,7 +23,7 @@
   };
 
   async function load() {
-    const files = ["meta", "teams", "rosters", "picks", "activity", "history", "values", "plan"];
+    const files = ["meta", "teams", "rosters", "picks", "activity", "history", "values", "plan", "owners", "finder"];
     const got = await Promise.all(
       files.map((f) => fetch(`data/${f}.json`, { cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).catch(() => null))
     );
@@ -72,7 +75,7 @@
           </tr>`).join("")}</tbody>
       </table></div>
       ${windowChart(teams)}
-      <p class="foot"><a href="#history">League history and champions →</a></p>
+      <p class="foot"><a href="#owners">League-mates and trade history →</a> · <a href="#activity">Recent moves →</a> · <a href="#history">Champions →</a></p>
       <p class="foot">${s.teams} teams · ${s.ppr === 1 ? "full PPR" : s.ppr + " PPR"} · ${s.taxi_slots} taxi · trade deadline wk ${s.trade_deadline} · ${s.playoff_teams}-team playoffs from wk ${s.playoff_week_start}</p>`;
   }
 
@@ -267,6 +270,181 @@
       <p class="foot">Sell: veterans at their position's age cliff (QB 32, RB 26, WR 28, TE 29) or projected to lose 15%+ in two seasons, with contenders and playoff-bubble teams whose starting lineup they'd upgrade most. Buy: players 24 or younger outside their team's best lineup, contenders' benches first. “ppg” shows now → two seasons out.</p>`;
   }
 
+  // ---------------------------------------------------------------- Trade lab
+  // Mirrors dynasty/trade.py: package value (sum v^1.3)^(1/1.3), best-lineup PPG for 3 horizons.
+  const PKG = 1.3, FAIR = 0.10;
+  const OUT = new Set(["IR", "Out", "PUP", "Sus", "NA", "COV", "DNR"]);
+  const FLEX = { FLEX: ["RB", "WR", "TE"], SUPER_FLEX: ["QB", "RB", "WR", "TE"], REC_FLEX: ["WR", "TE"], WRRB_FLEX: ["WR", "RB"] };
+  const SKILLPOS = ["QB", "RB", "WR", "TE"];
+  const pkgValue = (vals) => {
+    const v = vals.map((x) => Math.max(0, x || 0));
+    if (!v.length) return 0;
+    if (v.length === 1) return v[0];
+    return Math.pow(v.reduce((a, x) => a + Math.pow(x, PKG), 0), 1 / PKG);
+  };
+  function bestLineup(players, h) {
+    const slots = D.meta?.settings?.roster_positions || [];
+    const key = ["p0", "proj", "p2"][h];
+    const byPos = {};
+    for (const p of players) {
+      const v = p[key];
+      if (!SKILLPOS.includes(p.pos) || v == null) continue;
+      if (h === 0 && (p.slot === "reserve" || OUT.has(p.inj))) continue;
+      (byPos[p.pos] ||= []).push(v);
+    }
+    Object.values(byPos).forEach((l) => l.sort((a, b) => b - a));
+    const used = {};
+    let total = 0;
+    for (const s of slots) {
+      if (!SKILLPOS.includes(s)) continue;
+      const i = used[s] || 0;
+      if (byPos[s] && i < byPos[s].length) { total += byPos[s][i]; used[s] = i + 1; }
+    }
+    for (const s of slots) {
+      if (!FLEX[s]) continue;
+      let best = null;
+      for (const pos of FLEX[s]) {
+        const i = used[pos] || 0;
+        if (byPos[pos] && i < byPos[pos].length && (best === null || byPos[pos][i] > byPos[best][used[best] || 0])) best = pos;
+      }
+      if (best) { total += byPos[best][used[best] || 0]; used[best] = (used[best] || 0) + 1; }
+    }
+    return total;
+  }
+  const pickKey = (p) => `${p.season}-${p.round}-${p.from}`;
+  function assetsOf(rid) {
+    const players = ((D.rosters || {})[rid] || []).filter((p) => p.val > 0 || SKILLPOS.includes(p.pos));
+    const picks = (D.picks || []).filter((p) => p.owner === rid);
+    return { players, picks };
+  }
+  function assetValue(key) {
+    const pk = (D.picks || []).find((p) => pickKey(p) === key);
+    if (pk) return pk.value || 0;
+    for (const l of Object.values(D.rosters || {})) { const p = l.find((x) => x.id === key); if (p) return p.val || 0; }
+    return 0;
+  }
+  function assetLabel(key) {
+    const pk = (D.picks || []).find((p) => pickKey(p) === key);
+    if (pk) return `${pk.season} Rd ${pk.round}${pk.traded ? ` (${pk.from_team})` : ""}`;
+    for (const l of Object.values(D.rosters || {})) { const p = l.find((x) => x.id === key); if (p) return `${p.name} (${p.pos})`; }
+    return key;
+  }
+  function evaluateTrade(me, them) {
+    const mineP = (D.rosters || {})[me] || [], theirP = (D.rosters || {})[them] || [];
+    const gv = [...give].map(assetValue), tv = [...get].map(assetValue);
+    const ga = pkgValue(gv), ta = pkgValue(tv);
+    const moveOut = (list, out, inn) => list.filter((p) => !out.has(p.id)).concat(inn);
+    const gotPlayers = theirP.filter((p) => get.has(p.id)), gavePlayers = mineP.filter((p) => give.has(p.id));
+    const afterMe = moveOut(mineP, give, gotPlayers), afterThem = moveOut(theirP, get, gavePlayers);
+    const delta = (before, after) => [0, 1, 2].map((h) => +(bestLineup(after, h) - bestLineup(before, h)).toFixed(1));
+    const big = Math.max(ga, ta, 1), diff = ta - ga;
+    return {
+      giveRaw: gv.reduce((a, b) => a + b, 0), getRaw: tv.reduce((a, b) => a + b, 0), giveAdj: ga, getAdj: ta, diff,
+      verdict: Math.abs(diff) <= FAIR * big ? "fair" : diff > 0 ? "win" : "lose",
+      me: delta(mineP, afterMe), them: delta(theirP, afterThem),
+    };
+  }
+
+  function renderTrade() {
+    const me = myId();
+    const others = (D.teams || []).filter((t) => t.roster_id !== me);
+    if (tradePartner == null) tradePartner = Number(store.get("partner")) || null;
+    const partner = others.find((t) => t.roster_id === tradePartner);
+    const sugg = (D.finder || []).filter((f) => !partner || f.partner === tradePartner);
+    const sgn = (x) => (x > 0 ? `+${x}` : `${x}`);
+    const cls = (x) => (x > 0.05 ? "up" : x < -0.05 ? "down" : "muted");
+    const assetRow = (key, label, meta, val, set, side) => `
+      <label class="asset ${set.has(key) ? "on" : ""}">
+        <input type="checkbox" data-asset="${esc(key)}" data-side="${side}" ${set.has(key) ? "checked" : ""}>
+        <span class="aname">${label}<span class="pmeta">${meta}</span></span>
+        <span class="aval">${fmt(val)}</span>
+      </label>`;
+    const list = (rid, set, side) => {
+      const { players, picks } = assetsOf(rid);
+      return players.sort((a, b) => (b.val || 0) - (a.val || 0)).map((p) =>
+        assetRow(p.id, `<span class="pos-dot ${esc(p.pos)}">${esc(p.pos)}</span> ${esc(p.name)}`,
+          ` · ${p.age ?? "–"} · ${p.p0 ?? "–"}→${p.p2 ?? "–"} ppg`, p.val || 0, set, side)).join("") +
+        picks.map((p) => assetRow(pickKey(p), `◇ ${p.season} Rd ${p.round}`,
+          ` · ${p.traded ? `via ${esc(p.from_team)}` : "own"}${p.exp_slot ? ` · ~${p.round}.${String(Math.round(p.exp_slot)).padStart(2, "0")}` : ""}`,
+          p.value || 0, set, side)).join("");
+    };
+    let result = "";
+    if (partner && (give.size || get.size)) {
+      const ev = evaluateTrade(me, tradePartner);
+      const verdict = ev.verdict === "fair" ? `<span class="badge buy">FAIR</span>` :
+        ev.verdict === "win" ? `<span class="badge buy">YOU WIN BY ${fmt(ev.diff)}</span>` :
+        `<span class="badge sell">THEY WIN BY ${fmt(-ev.diff)}</span>`;
+      const contending = ["Dynasty power", "Win now"].includes(partner.window);
+      const note = contending
+        ? (ev.them[0] > 0.3 ? `They're ${partner.window.toLowerCase()} and their lineup gets better now (${sgn(ev.them[0])} ppg): a deal they can say yes to.`
+                            : `They're ${partner.window.toLowerCase()}, but this doesn't help their lineup now: a hard sell.`)
+        : (ev.them[2] > 0.3 ? `They're ${(partner.window || "").toLowerCase()} and gain long-term (${sgn(ev.them[2])} ppg in 2 yrs).` : `Little in it for their window (${esc(partner.window || "?")}).`);
+      result = `
+        <div class="card result">
+          <div class="txn-head"><span class="txn-type">Trade check</span>${verdict}</div>
+          <div class="move">You give <b>${fmt(ev.giveAdj)}</b>${give.size > 1 ? ` <span class="pmeta">(${fmt(ev.giveRaw)} raw)</span>` : ""} · you get <b>${fmt(ev.getAdj)}</b>${get.size > 1 ? ` <span class="pmeta">(${fmt(ev.getRaw)} raw)</span>` : ""}</div>
+          <table class="mini"><thead><tr><th>Lineup PPG</th><th class="num">Now</th><th class="num">Next yr</th><th class="num">In 2 yrs</th></tr></thead>
+            <tbody><tr><td>You</td>${ev.me.map((x) => `<td class="num ${cls(x)}">${sgn(x)}</td>`).join("")}</tr>
+                   <tr><td>${esc(partner.team)}</td>${ev.them.map((x) => `<td class="num ${cls(x)}">${sgn(x)}</td>`).join("")}</tr></tbody></table>
+          <div class="move pmeta">${note}</div>
+        </div>`;
+    }
+    const prof = partner ? (D.owners?.profiles || []).find((p) => p.roster_id === tradePartner) : null;
+    return `
+      <div class="controls">
+        <select id="trade-partner" aria-label="Trade partner">
+          <option value="">Pick a trade partner…</option>
+          ${others.map((t) => `<option value="${t.roster_id}" ${t.roster_id === tradePartner ? "selected" : ""}>${esc(t.team)}${t.window ? ` · ${esc(t.window)}` : ""}</option>`).join("")}
+        </select>
+        ${give.size || get.size ? `<button class="more small" data-clear="1">Clear</button>` : ""}
+      </div>
+      ${result}
+      ${prof ? profileCard(prof, true) : ""}
+      ${partner ? `
+        <div class="cols">
+          <div class="card"><h2>You give</h2>${list(me, give, "give")}</div>
+          <div class="card"><h2>You get</h2>${list(tradePartner, get, "get")}</div>
+        </div>` : ""}
+      <h2>Suggested trades${partner ? ` with ${esc(partner.team)}` : ""}</h2>
+      <div class="card">${sugg.slice(0, partner ? 5 : 12).map((f) => `
+        <div class="sugg">
+          <div><div class="pname">Give ${esc(f.give_label)}</div><div class="pname">Get ${esc(f.get_label)}</div>
+          <div class="pmeta">${partner ? "" : `${esc(f.partner_team)} (${esc(f.partner_window || "")}) · `}${fmt(f.give_value)} for ${fmt(f.get_value)} · you ${sgn(+(((f.my_delta[1] + f.my_delta[2]) / 2).toFixed(1)))} ppg later, them ${sgn(f.their_delta[0])} now</div></div>
+          <button class="more small" data-load="${f.rank}">Try it</button>
+        </div>`).join("") || `<p class="muted">No suggestions for this team.</p>`}</div>
+      <p class="foot">Values: 2-for-1 packages count less than their sum (two equal pieces ≈ 1.7× one), since only so many players start. Fair = within 10%. Lineup PPG is the best possible starting lineup before vs after. Suggestions are fair deals that help your window and, for contenders, help their lineup now.</p>`;
+  }
+
+  // ---------------------------------------------------------------- Owners
+  function profileCard(p, compact = false) {
+    const pos = Object.entries(p.acquired_positions || {}).map(([k, v]) => `${k} ${v}`).join(", ");
+    const mix = p.draft_mix_other_leagues || {};
+    const mixTxt = Object.keys(mix).length ? Object.entries(mix).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${Math.round(v * 100)}%`).join(" · ") : "";
+    return `
+      <div class="card">
+        <div class="txn-head"><span class="pname">${esc(p.team)}</span><span>${p.window ? `<span class="win ${winCls(p.window)}">${esc(p.window)}</span>` : ""}</span></div>
+        ${(p.tags || []).length ? `<div class="tags">${p.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join("")}</div>` : ""}
+        <div class="move">${p.trades} trades${p.trades ? ` · net ${p.trade_net >= 0 ? "+" : ""}${fmt(p.trade_net)} by today's values` : ""} · picks in ${p.picks_in} / out ${p.picks_out}</div>
+        ${(p.partners || []).length ? `<div class="move pmeta">Trades most with: ${p.partners.map((x) => `${esc(x.team)} (${x.n})`).join(", ")}</div>` : ""}
+        ${pos ? `<div class="move pmeta">Players acquired by trade: ${pos}</div>` : ""}
+        <div class="move pmeta">Waivers: ${p.waiver_adds} claims, $${fmt(p.faab_spent)} FAAB this season (top bid $${fmt(p.max_bid)}) · ${p.fa_adds} free-agent adds</div>
+        ${compact ? "" : `${mixTxt ? `<div class="move pmeta">Early-round picks in ${p.other_leagues} other leagues: ${mixTxt}</div>` : p.other_leagues ? `<div class="move pmeta">Plays ${p.other_leagues} other Sleeper leagues</div>` : ""}`}
+      </div>`;
+  }
+
+  function renderOwners() {
+    const O = D.owners || { profiles: [], trades: [] };
+    return `
+      <h2>League-mates</h2>
+      <div class="cols">${O.profiles.map((p) => profileCard(p)).join("")}</div>
+      <h2>Trade history, judged by today's values</h2>
+      ${O.trades.map((t) => `
+        <div class="card">
+          <div class="txn-head"><span class="txn-type trade">Trade</span><span>${t.season}${t.week ? ` · wk ${t.week}` : ""}</span></div>
+          ${t.sides.map((sd) => `<div class="move"><b>${esc(sd.team || "?")}</b> got ${sd.received.map(esc).join(", ") || "nothing"} <span class="${sd.net > 0 ? "up" : sd.net < 0 ? "down" : "muted"}">${sd.net > 0 ? "+" : ""}${fmt(sd.net)}</span></div>`).join("")}
+        </div>`).join("") || `<p class="muted">No trades yet.</p>`}`;
+  }
+
   // ---------------------------------------------------------------- Activity
   function renderActivity() {
     const items = D.activity || [];
@@ -302,7 +480,7 @@
   const ordinal = (n) => n + (["th", "st", "nd", "rd"][((n % 100) - 20) % 10] || ["th", "st", "nd", "rd"][n % 100] || "th");
 
   // ---------------------------------------------------------------- router
-  const TABS = { league: renderLeague, team: renderTeam, values: renderValues, picks: renderPicks, plan: renderPlan, activity: renderActivity, history: renderHistory };
+  const TABS = { league: renderLeague, team: renderTeam, values: renderValues, picks: renderPicks, plan: renderPlan, trade: renderTrade, owners: renderOwners, activity: renderActivity, history: renderHistory };
   function route() {
     const tab = (location.hash || "#league").slice(1);
     const fn = TABS[tab] || renderLeague;
@@ -323,8 +501,32 @@
     const vp = e.target.closest("[data-vp]");
     if (vp) { valPos = vp.dataset.vp; valLimit = 100; rerender(); }
     if (e.target.closest("[data-more]")) { valLimit += 100; rerender(); }
+    if (e.target.closest("[data-clear]")) { give.clear(); get.clear(); rerender(); }
+    const ld = e.target.closest("[data-load]");
+    if (ld) {
+      const f = (D.finder || []).find((x) => x.rank === Number(ld.dataset.load));
+      if (f) {
+        tradePartner = f.partner; store.set("partner", f.partner);
+        give.clear(); get.clear();
+        f.give.forEach((k) => give.add(k)); f.get.forEach((k) => get.add(k));
+        route();
+      }
+    }
   });
   document.addEventListener("change", (e) => {
+    if (e.target.dataset && e.target.dataset.asset) {
+      const set = e.target.dataset.side === "give" ? give : get;
+      if (e.target.checked) set.add(e.target.dataset.asset); else set.delete(e.target.dataset.asset);
+      rerender();
+      return;
+    }
+    if (e.target.id === "trade-partner") {
+      tradePartner = e.target.value ? Number(e.target.value) : null;
+      store.set("partner", tradePartner ?? "");
+      get.clear();
+      rerender();
+      return;
+    }
     if (e.target.id === "val-scope") { valScope = e.target.value; valLimit = 100; rerender(); return; }
     if (e.target.id === "roster-pick") {
       rosterFor = Number(e.target.value);

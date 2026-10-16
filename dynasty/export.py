@@ -279,6 +279,28 @@ def run(store: Store, site_dir: Path) -> dict[str, int]:
     _write(out, "values.json", value_list)
     plan = planner.build(store) if _table(store, "pick_value") else {}
     _write(out, "plan.json", plan)
+
+    # ---- owners + trades (phase 4) ---------------------------------------------
+    owners_out = {"profiles": [], "trades": []}
+    if _table(store, "owner_profile"):
+        for r in store.query("SELECT * FROM owner_profile ORDER BY trades DESC"):
+            d = dict(r)
+            for k in ("partners", "acquired_positions", "rookie_early", "draft_mix_other_leagues", "tags"):
+                d[k] = json.loads(d[k] or "null")
+            owners_out["profiles"].append(d)
+    if _table(store, "trade_review"):
+        for r in store.query("SELECT * FROM trade_review ORDER BY ts DESC LIMIT 60"):
+            owners_out["trades"].append({"season": r["season"], "week": r["week"], "ts": r["ts"],
+                                         "sides": json.loads(r["sides"] or "[]")})
+    _write(out, "owners.json", owners_out)
+    finder = []
+    if _table(store, "trade_suggestion"):
+        for r in store.query("SELECT * FROM trade_suggestion ORDER BY rank"):
+            d = dict(r)
+            for k in ("give", "get", "my_delta", "their_delta"):
+                d[k] = json.loads(d[k] or "[]")
+            finder.append(d)
+    _write(out, "finder.json", finder)
     return {"teams": len(teams), "picks": len(picks), "activity": len(activity), "seasons": len(history),
             "values": len(value_list)}
 
@@ -300,7 +322,7 @@ def _value_maps(store: Store, season: int):
             for r in store.query("SELECT player_id, value FROM player_value WHERE snapshot_date=?", (old,)):
                 prev[r["player_id"]] = r["value"]
     if _table(store, "player_projection"):
-        for r in store.query("SELECT player_id, ppg_y1, talent_ppg, model_value FROM player_projection"):
+        for r in store.query("SELECT player_id, ppg_ros, ppg_y1, ppg_y2, talent_ppg, model_value FROM player_projection"):
             proj[r["player_id"]] = dict(r)
     if _table(store, "player_season"):
         for r in store.query("SELECT player_id, ppg, games FROM player_season WHERE season=? AND player_id IS NOT NULL",
@@ -323,6 +345,8 @@ def _value_fields(pid, vals, proj, cur_ppg) -> dict:
         "fc": round(v["fc_value"]) if v and v["fc_value"] is not None else None,
         "dp": round(v["dp_scaled"]) if v and v["dp_scaled"] is not None else None,
         "proj": pr["ppg_y1"] if pr else None,
+        "p0": pr["ppg_ros"] if pr else None,
+        "p2": pr["ppg_y2"] if pr else None,
         "ppg": c[0] if c else None,
         "gp": c[1] if c else None,
     }
