@@ -1004,7 +1004,8 @@
     else if (a.starts) parts.push(`${plural(a.starts, "start")}, none above a replacement starter`);
     if (a.left) {
       const d = new Date(`${a.left.date}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-      parts.push(`${fmt(a.remain)} ${a.left.valued === "then" ? "value" : "value today"} when ${a.left.how} ${d}`);
+      parts.push(a.left.valued === "then" ? `${fmt(a.remain)} value when ${a.left.how} ${d}`
+        : `${a.left.how} ${d}, counted at today's value ${fmt(a.remain)}`);
     } else if (a.banked > 0) {
       parts.push(`${fmt(a.remain)} value now`);
     }
