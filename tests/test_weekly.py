@@ -68,10 +68,12 @@ def league_db(path: str) -> Store:
         ("q2", "QB", "BUF", None, 18, 30), ("r4", "RB", "BUF", None, 12, 20), ("r5", "RB", "SF", None, 9, 10),
         ("w3", "WR", "KC", None, 14, 30), ("t2", "TE", "SF", None, 7, 5), ("w4", "WR", "DAL", None, 8, 5),
         ("k2", "K", "SF", None, None, None), ("SF", "DEF", "SF", None, None, None),
-        ("fa1", "RB", "KC", None, 14, 15), ("fa2", "WR", "NYJ", None, 4, 0), ("KC", "DEF", "KC", None, None, None),
+        ("fa1", "RB", "KC", None, 14, 15), ("q3", "QB", "KC", None, 16, 8), ("fa2", "WR", "NYJ", None, 4, 0), ("KC", "DEF", "KC", None, None, None),
     ]
     s.upsert("player", [{"player_id": p, "full_name": p.upper(), "position": pos, "team": t, "injury_status": inj,
                          "status": "Active"} for p, pos, t, inj, _, _ in P])
+    s.conn.execute("UPDATE player SET depth_chart_order=1 WHERE player_id IN ('q1','q2')")
+    s.conn.execute("UPDATE player SET depth_chart_order=2 WHERE player_id='q3'")   # KC's backup
     s.write_frame("player_projection", [{"player_id": p, "position": pos, "ppg_ros": ppg, "ros_share": 1.0,
                                          "model_value": fv * 1.5, "value_future": fv}
                                         for p, pos, t, inj, ppg, fv in P if ppg is not None])
@@ -152,6 +154,36 @@ class WeeklyBuildTest(unittest.TestCase):
         self.assertEqual(P["w1"]["pts"], 12.0)
         self.assertEqual(P["r2"]["st"], "bye")
         self.assertEqual(P["w2"]["proj"], 0.0)
+
+    def test_sleeper_projection_first(self):
+        # Sleeper's projection replaces the model's; a skill player Sleeper skips that week is out
+        self.s.write_frame("sleeper_projection", [
+            {"season": "2026", "week": 6, "player_id": "q1", "pts": 31.5},
+            {"season": "2026", "week": 6, "player_id": "r1", "pts": 4.0},
+            {"season": "2026", "week": 6, "player_id": "w2", "pts": 12.0}])   # ruled out: still 0
+        self.s.commit()
+        weekly.build(self.s, now=NOW)
+        P = weekly.report(self.s)["players"]
+        self.assertEqual(P["q1"]["proj"], 31.5)
+        self.assertEqual(P["q1"]["src"], "sleeper")
+        self.assertEqual(P["w2"]["proj"], 0.0)
+        self.assertEqual(P["r2"]["st"], "bye")
+        self.assertGreater(P["t1"]["proj"], 0.0)    # list too short to trust a missing player as out
+        self.assertGreater(P["k1"]["proj"], 0)      # kickers/defenses fall back to the model
+
+    def test_projection_points_use_league_scoring(self):
+        from dynasty.ingest_sleeper import projection_points
+        sc = {"pass_yd": 0.04, "pass_td": 4, "rec": 1, "rec_yd": 0.1, "rec_td": 6}
+        self.assertAlmostEqual(projection_points({"pass_yd": 250, "pass_td": 2, "pts_ppr": 99}, sc, "QB"), 18.0)
+        self.assertAlmostEqual(projection_points({"rec": 5, "rec_yd": 60, "rec_td": 0.5}, sc, "WR"), 14.0)
+        self.assertEqual(projection_points({"pts_ppr": 8.2, "sack": 2}, sc, "DEF"), 8.2)
+
+    def test_backup_qb_barely_projects(self):
+        P = self.r["players"]
+        self.assertIn("q3", P)                         # listed among free agents only if worth it...
+        self.assertLess(P["q3"]["proj"], 2.0)          # ...but he won't play: ~8% of a 16-point game
+        self.assertTrue(P["q3"]["backup"])
+        self.assertIsNone(P["q1"]["backup"])
 
     def test_waivers(self):
         recs = self.r["waivers"]["1"]

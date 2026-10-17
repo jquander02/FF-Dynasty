@@ -191,6 +191,13 @@ def build_routes() -> dict:
     for w in range(0, 19):
         routes[f"league/{LEAGUE}/transactions/{w}"] = {2: tx_week2, 3: tx_week3}.get(w, [])
         routes[f"league/{PREV}/transactions/{w}"] = []
+    # Sleeper's weekly projections: the app's list shape for week 6, nothing published later
+    pos = "&".join(f"position[]={p}" for p in ("QB", "RB", "WR", "TE", "K", "DEF"))
+    for w in range(1, 19):
+        routes[f"https://api.sleeper.app/projections/nfl/2026/{w}?season_type=regular&{pos}"] = (
+            [{"player_id": "4034", "stats": {"rush_yd": 80, "rush_td": 0.7, "rec": 4, "rec_yd": 30, "pts_ppr": 19.2}},
+             {"player_id": "NYJ", "stats": {"pts_ppr": 7.5}}] if w == 6 else [])
+        routes[f"projections/nfl/regular/2026/{w}"] = {}
     return routes
 
 

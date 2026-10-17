@@ -29,7 +29,7 @@ import json
 import logging
 import math
 import statistics
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
 from .model import FLEX_ELIGIBLE
@@ -44,6 +44,11 @@ SD_FIT = {"QB": (6.96, 0.078), "RB": (3.18, 0.346), "WR": (2.89, 0.394), "TE": (
 PLAY = {"Questionable": 0.8, "Doubtful": 0.2, "Out": 0.0, "IR": 0.0, "PUP": 0.0, "Sus": 0.0,
         "NA": 0.0, "COV": 0.0, "DNR": 0.0}
 LONG_OUT = {"IR", "PUP", "Sus", "NA"}
+# Model fallback (weeks or players Sleeper doesn't project). Measured on 2019-2025 player-weeks:
+BACKUP_QB_NOW = 0.08      # backup QBs scored 8% of their per-game projection (played 12% of weeks)
+BACKUP_QB_LATER = 0.12    # ...more over later weeks: injuries and benchings
+SLEEPER_FULL = 150        # skill players in a week's Sleeper projections for the list to count as complete
+NO_GAMES_YET = 0.05       # RB/WR/TE with no games by week 3 played 5% of the time
 GAME_MINUTES = 190        # kickoff to final whistle, typical
 FINAL_AFTER = 225         # treat as final after this many minutes
 TEAM_CODE = {"LA": "LAR", "STL": "LAR", "SD": "LAC", "OAK": "LV"}  # nflverse -> Sleeper
@@ -211,7 +216,7 @@ class Projector:
                  lid: str):
         self.week, self.games, self.avg_imp, self.league_imp = week, games, avg_imp, league_imp
         self.info = {r["player_id"]: dict(r) for r in store.query(
-            "SELECT player_id, full_name, position, team, injury_status, status, age FROM player "
+            "SELECT player_id, full_name, position, team, injury_status, status, age, depth_chart_order FROM player "
             "WHERE position IN ('QB','RB','WR','TE','K','DEF')")}
         self.proj = {}
         if _has(store, "player_projection"):
@@ -220,6 +225,22 @@ class Projector:
             for r in store.query(f"SELECT player_id, ppg_ros{', ' + extra if extra else ''} FROM player_projection"):
                 self.proj[r["player_id"]] = dict(r)
         self.kicker = self._kickers(store, season)
+        self.qb_starter = self._qb_starters(store, season)
+        # Sleeper's own projections (league-scored), the first choice for any week they cover
+        self.sleeper = {}
+        if _has(store, "sleeper_projection"):
+            for r in store.query("SELECT week, player_id, pts FROM sleeper_projection WHERE season=?", (str(season),)):
+                if r["pts"] is not None:
+                    self.sleeper[(r["week"], r["player_id"])] = max(0.0, r["pts"])
+        # weeks where Sleeper's list looks complete: a skill player missing from it isn't expected to play
+        per_week = Counter(w for w, pid in self.sleeper if self.pos(pid) in ("QB", "RB", "WR", "TE"))
+        self.sleeper_weeks = {w for w, n in per_week.items() if n >= SLEEPER_FULL}
+        # games played this season, for the "hasn't played yet" rule in the model fallback
+        self.games_played = defaultdict(int)
+        if _has(store, "player_week"):
+            for r in store.query("SELECT player_id, COUNT(*) n FROM player_week WHERE season=? "
+                                 "AND player_id IS NOT NULL GROUP BY player_id", (season,)):
+                self.games_played[r["player_id"]] = r["n"]
         self.defense, self.def_mean = self._defenses(store, lid)
 
     def _kickers(self, store: Store, season: int) -> dict:
@@ -239,6 +260,42 @@ class Projector:
             out[pid] = (sum(c) + 4 * prior) / (len(c) + 4)
         out["_mean"] = mean
         return out
+
+    def _qb_starters(self, store: Store, season: int) -> dict:
+        """Team -> the QB expected to start: healthy first, then Sleeper's depth chart, then who threw
+        the most passes in the team's latest game, then the higher projection. A QB's points per game
+        are per game played, so a backup must not be projected like a starter."""
+        last_att = {}
+        if _has(store, "player_week") and "pass_att" in _cols(store, "player_week"):
+            latest = {}
+            rows = store.query("SELECT player_id, team, week, pass_att FROM player_week "
+                               "WHERE position='QB' AND season=? AND player_id IS NOT NULL", (season,))
+            for r in rows:
+                latest[r["team"]] = max(latest.get(r["team"], 0), r["week"])
+            for r in rows:
+                if r["week"] == latest.get(r["team"]):
+                    last_att[r["player_id"]] = r["pass_att"] or 0
+        by_team = defaultdict(list)
+        for pid, i in self.info.items():
+            if i["position"] == "QB" and i.get("team") and i.get("status") in (None, "Active"):
+                by_team[i["team"]].append(pid)
+        out = {}
+        for team, qbs in by_team.items():
+            def key(pid):
+                i = self.info[pid]
+                healthy = PLAY.get(i.get("injury_status") or "", 1.0) >= 0.5
+                depth = i.get("depth_chart_order") or 99
+                ppg = (self.proj.get(pid) or {}).get("ppg_ros") or 0.0
+                return (not healthy, depth, -last_att.get(pid, 0), -ppg)
+            out[team] = min(qbs, key=key)
+        return out
+
+    def backup_qb(self, pid) -> bool:
+        i = self.info.get(pid) or {}
+        if i.get("position") != "QB" or not i.get("team"):
+            return False
+        starter = self.qb_starter.get(i["team"])
+        return starter is not None and starter != pid
 
     def _defenses(self, store: Store, lid: str) -> tuple[dict, float]:
         rows = store.query(
@@ -286,8 +343,13 @@ class Projector:
         if pos == "DEF":
             return 1.0
         ahead = w - self.week
+        backup = BACKUP_QB_NOW if ahead == 0 else BACKUP_QB_LATER
+        role = backup if self.backup_qb(pid) else 1.0
+        if (pos in ("RB", "WR", "TE") and self.week >= 3 and self.games_played
+                and not self.games_played.get(pid)):
+            role = NO_GAMES_YET
         if ahead == 0:
-            return PLAY.get(inj, 1.0)
+            return PLAY.get(inj, 1.0) * role
         share = (self.proj.get(pid) or {}).get("ros_share")
         share = 0.9 if share is None else min(1.0, max(0.0, share))
         if pos == "K":
@@ -295,8 +357,11 @@ class Projector:
         if inj in LONG_OUT and ahead < 4:
             return 0.0
         if inj == "Out" and ahead == 1:
-            return share * 0.6
-        return share
+            return share * 0.6 * role
+        return share * role
+
+    def source(self, pid, w) -> str:
+        return "sleeper" if (w, pid) in self.sleeper else "model"
 
     def dist(self, pid, w) -> tuple[float, float]:
         """(mean, variance) of his points in week w, before any are scored."""
@@ -307,10 +372,23 @@ class Projector:
             if self.games or not team:
                 return 0.0, 0.0
             g = {}
+        pos = self.pos(pid)
+        a, k = SD_FIT.get(pos, (5.0, 0.3))
+        if (w, pid) in self.sleeper:
+            # Sleeper already accounts for matchup, role and injury news; only a player ruled out
+            # since (or on IR) is zeroed here
+            inj = (self.info.get(pid) or {}).get("injury_status") or ""
+            if PLAY.get(inj, 1.0) == 0.0 and (w == self.week or (inj in LONG_OUT and w - self.week < 4)):
+                return 0.0, 0.0
+            m = self.sleeper[(w, pid)]
+            sd = a + k * m
+            return m, sd * sd
+        if w in self.sleeper_weeks and pos in ("QB", "RB", "WR", "TE"):
+            # Sleeper covered this week but not him: not expected to play
+            return 0.0, 0.0
         b = self.base(pid)
         if not b or b <= 0:
             return 0.0, 0.0
-        pos = self.pos(pid)
         fac = 1.0
         if pos == "DEF":
             opp = self.games.get((w, g.get("opp")), {}) if g else {}
@@ -319,7 +397,6 @@ class Projector:
         elif g.get("implied") and self.avg_imp.get(team):
             fac = (g["implied"] / self.avg_imp[team]) ** VEGAS_BETA
         m = b * fac
-        a, k = SD_FIT.get(pos, (5.0, 0.3))
         sd = a + k * m
         p = self.play_prob(pid, w)
         mean = p * m
@@ -687,6 +764,8 @@ def build(store: Store, now: datetime | None = None) -> dict:
             "st": stt, "proj": round(m, 1), "sd": round(math.sqrt(v), 1),
             "pts": round(s, 2) if stt in ("live", "final") else None,
             "ppg": round(P.base(pid), 1) if P.base(pid) else None,
+            "backup": True if P.backup_qb(pid) and P.source(pid, week) == "model" else None,
+            "src": P.source(pid, week),
             "rid": next((r for r, pids in roster.items() if pid in pids), None),
         }
 

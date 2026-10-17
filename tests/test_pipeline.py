@@ -107,6 +107,12 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(res.my_user_id, ME)
         self.assertEqual(res.my_roster_id, MY_ROSTER)
         self.assertEqual(self.client.missing, [])
+        proj = {r["player_id"]: r for r in self.q("SELECT * FROM sleeper_projection WHERE week=6")}
+        self.assertEqual(set(proj), {"4034", "NYJ"})
+        sc = json.loads(self.q("SELECT scoring_settings FROM league_season WHERE is_current=1")[0]["scoring_settings"])
+        expect = 80 * sc.get("rush_yd", 0) + 0.7 * sc.get("rush_td", 0) + 4 * sc.get("rec", 0) + 30 * sc.get("rec_yd", 0)
+        self.assertAlmostEqual(proj["4034"]["pts"], round(expect, 2), places=2)   # this league's scoring
+        self.assertEqual(proj["NYJ"]["pts"], 7.5)                                # defenses: Sleeper's total
         cur = self.q("SELECT * FROM league_season WHERE is_current=1")[0]
         self.assertEqual(cur["league_id"], LEAGUE)
         self.assertEqual((cur["taxi_slots"], cur["waiver_budget"], cur["draft_rounds"]), (3, 1000, 3))

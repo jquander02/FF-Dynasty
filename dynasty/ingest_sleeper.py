@@ -6,6 +6,7 @@ The current season is refreshed on every run.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -470,6 +471,48 @@ def ingest_trending(store: Store, client: SleeperClient) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Sleeper's weekly projections (Week tab)
+# ---------------------------------------------------------------------------
+KDEF_POS = {"K", "DEF"}
+
+
+def projection_points(stats: dict, scoring: dict, position: str | None) -> float | None:
+    """Fantasy points from a projected stat line. Skill players are scored with this league's
+    settings (Sleeper's stat keys are its scoring keys); kickers and defenses use Sleeper's own
+    totals, since their bracket scoring (points allowed 0, 1-6, ...) can't be applied to an average."""
+    ppr = scoring.get("rec", 0) or 0
+    own = stats.get("pts_ppr" if ppr >= 1 else "pts_half_ppr" if ppr >= 0.5 else "pts_std")
+    if position in KDEF_POS:
+        return own
+    pts = sum(float(v) * float(scoring[k]) for k, v in stats.items()
+              if k in scoring and isinstance(v, (int, float)) and not k.startswith("pts_"))
+    if pts == 0 and own:
+        return own
+    return round(pts, 2)
+
+
+def ingest_projections(store: Store, client: SleeperClient, season: str, weeks, ttl_for) -> int:
+    lg = store.query("SELECT scoring_settings FROM league_season WHERE is_current=1")
+    scoring = json.loads(lg[0]["scoring_settings"] or "{}") if lg else {}
+    pos = {r["player_id"]: r["position"] for r in store.query("SELECT player_id, position FROM player")}
+    rows = []
+    for week in weeks:
+        try:
+            got = client.projections(season, week, ttl=ttl_for(week))
+        except Exception as exc:  # noqa: BLE001 - unofficial endpoint: never block the refresh
+            log.warning("Sleeper projections week %s failed: %s", week, exc)
+            continue
+        for pid, st in got.items():
+            p = projection_points(st, scoring, pos.get(pid))
+            if p is not None:
+                rows.append({"season": str(season), "week": week, "player_id": pid, "pts": p,
+                             "pts_sleeper": st.get("pts_ppr")})
+    if rows:
+        store.write_frame("sleeper_projection", rows, replace_where=("season=?", (str(season),)))
+    return len(rows)
+
+
+# ---------------------------------------------------------------------------
 # Owners' other leagues
 # ---------------------------------------------------------------------------
 def ingest_owner_leagues(
@@ -616,6 +659,15 @@ def run(
     if players:
         res.add("players", ingest_players(store, client))
         res.add("trending", ingest_trending(store, client))
+
+    # Sleeper's projections for this week through the end of the playoffs (every run: news moves them)
+    if str(state.get("season")) == res.season and state.get("season_type") in ("regular", "post"):
+        wk = int(state.get("week") or 0)
+        cur = store.query("SELECT playoff_week_start FROM league_season WHERE is_current=1")
+        end = int((cur[0]["playoff_week_start"] if cur else None) or 15) + 2
+        if wk >= 1:
+            res.add("projections", ingest_projections(
+                store, client, res.season, range(wk, end + 1), lambda w, wk=wk: HOUR if w == wk else DAY))
 
     if owner_leagues:
         owners = [

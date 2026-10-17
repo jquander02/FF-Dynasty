@@ -60,7 +60,7 @@ class SleeperClient:
         if cached is not None:
             return cached["body"]
 
-        url = f"{BASE_URL}/{path}"
+        url = path if path.startswith("http") else f"{BASE_URL}/{path}"
         delay = 1.0
         for attempt in range(self.retries + 1):
             wait = self.min_interval - (time.monotonic() - self._last_call)
@@ -162,6 +162,25 @@ class SleeperClient:
 
     def draft_traded_picks(self, draft_id: str, ttl=DAY):
         return self.get(f"draft/{draft_id}/traded_picks", ttl=ttl) or []
+
+    PROJ_POS = ("QB", "RB", "WR", "TE", "K", "DEF")
+
+    def projections(self, season: str | int, week: int, ttl=HOUR) -> dict:
+        """Sleeper's weekly projections: {player_id: stats}. Not in Sleeper's documented API, so two
+        known shapes are tried: the app's list endpoint, then the older v1 dict endpoint."""
+        pos = "&".join(f"position[]={p}" for p in self.PROJ_POS)
+        body = self.get(f"https://api.sleeper.app/projections/nfl/{season}/{week}?season_type=regular&{pos}", ttl=ttl)
+        out = {}
+        if isinstance(body, list):
+            for r in body:
+                pid, st = r.get("player_id"), r.get("stats")
+                if pid and isinstance(st, dict):
+                    out[str(pid)] = st
+        if not out:
+            body = self.get(f"projections/nfl/regular/{season}/{week}", ttl=ttl)
+            if isinstance(body, dict):
+                out = {str(k): v for k, v in body.items() if isinstance(v, dict)}
+        return out
 
     def players(self):
         # ~5 MB; Sleeper asks that this be pulled at most once a day.

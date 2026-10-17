@@ -175,15 +175,17 @@ Tables: `owner_profile`, `trade_review`, `trade_suggestion`.
 
 ## This week (dynasty/weekly.py)
 
-- **Projection for one game:** the model's rest-of-season points per game, times (team's
-  betting-line implied points this week ÷ its season-average implied points)^0.5, times the
-  chance he plays (questionable 80%, doubtful 20%, out/IR 0); zero on a bye. Kickers use
-  their league-scored points per game, defenses this league's points for them; a defense
-  scales with the inverse of the opponent's implied total. Lines and kickoff times come from
-  nflverse schedules (`nfl_schedules`).
-- **Tested:** fit on 2015–20 player-weeks, checked on 2021–25. The relative betting-line
-  factor cut weekly RMSE from 7.28 to 7.26; a raw implied total, larger exponents and the
-  opponent's points allowed to the position were no better or worse.
+- **Projection for one game:** Sleeper's own weekly projections (unofficial endpoint, fetched
+  every refresh for this week through the playoffs into `sleeper_projection`), scored with this
+  league's settings for QB/RB/WR/TE and Sleeper's totals for K/DEF. A player ruled out (or on IR)
+  is zeroed; when Sleeper's week list is complete, a skill player missing from it is out.
+- **Fallback model** (players or weeks Sleeper doesn't cover): rest-of-season points per game ×
+  (team implied points ÷ its season average)^0.5 × chance he plays (questionable 80%, doubtful
+  20%); backup QBs 8% and RB/WR/TE with no games yet this season (week 3+) 5%, both measured on
+  2019–25 player-weeks. Kickers use league-scored points per game, defenses this league's points.
+- **Historical test of the model** (2019–25, rebuilt as of each week): when a player plays, the
+  average miss is 5.5 points with no bias and calibrated buckets; 80% ranges hold 79–85% of
+  results; simulated matchups' win odds track results (57% → 57%, 72% → 71%).
 - **Spread:** a player's score varies around his projection by a + b × projection (fit by
   position: QB 6.96 + 0.08p, RB 3.18 + 0.35p, WR 2.89 + 0.39p, TE 2.13 + 0.45p). Teammates'
   misses barely correlate (0.04), so team variances add. Win odds use a normal approximation.

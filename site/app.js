@@ -323,7 +323,7 @@
   // A player in a weekly list: name button (opens the sheet when we know him), team and game.
   function wkName(pid, extra = "") {
     const x = wp(pid);
-    const inj = x.inj ? `<span class="chip out">${esc(x.inj)}</span>` : "";
+    const inj = (x.inj ? `<span class="chip out">${esc(x.inj)}</span>` : "") + (x.backup ? `<span class="chip">Backup</span>` : "");
     const nm = byId[pid] ? `<button class="linkish" type="button" data-player="${esc(pid)}">${esc(x.name || pid)}</button>` : esc(x.name || pid);
     return `<span class="dot ${esc(x.pos)}">${esc(x.pos || "?")}</span>${nm}${inj}${extra}
       <span class="meta"><span>${esc(x.pos === "DEF" ? "" : x.team || "FA") || "Defense"}</span><span>${gameText(x)}</span></span>`;
@@ -446,8 +446,8 @@
         ${seg.map(([k, l]) => `<button data-wv="${k}" class="${v === k ? "on" : ""}" aria-pressed="${v === k}">${l}</button>`).join("")}</div></div>
       ${v === "matchups" ? weekMatchups(rid) : v === "waivers" ? weekWaivers(rid) : weekLineup(rid)}
       ${how("How this week's numbers work", [
-        `Each player's projection is the model's rest-of-season points per game, nudged by his team's betting-line point total for this game against its usual total (a team expected to score 10% more gets about 5% more). Kickers and defenses use their points so far, adjusted the same way; a defense facing a low-scoring offense projects higher. Byes and players ruled out count zero.`,
-        `Tested on past seasons: the betting-line nudge cut weekly projection error slightly (7.28 to 7.26 points); the opponent's points allowed to the position added nothing, so it's left out. A single week is mostly noise: a 12-point projection lands anywhere from about 3 to 21.`,
+        `Projections are Sleeper's own weekly projections (the ones in the Sleeper app), scored with this league's settings. They already account for matchups, depth charts and injury news; a player ruled out since is set to zero. Byes count zero. They refresh with every update: daily, and every two hours on game days.`,
+        `When Sleeper hasn't projected a player or a week yet, the app falls back to its own model: rest-of-season points per game, nudged by the betting-line total for his team's game. A backup quarterback gets 8% of his per-game number and a player with no games yet this season 5%, the rates seen in past seasons. A single week is mostly noise: a 12-point projection lands anywhere from about 3 to 21.`,
         `Win odds assume each player's score varies around his projection by the amount seen in past games. Points already scored count as final; games in progress count what's scored plus the unplayed share. Players whose games have started are locked, as on Sleeper.`,
         `Waiver adds: the points a player would add to this team's best lineup in each remaining week (playoff weeks weighted by playoff odds), plus his model value beyond this season. The bid pays only for his edge over the next-best free agent, since that one costs nothing: a share of remaining FAAB that grows with the edge, kept just above what the most interested rival should pay. Injury news updates each morning; scores update every two hours on game days.`,
       ])}`;
