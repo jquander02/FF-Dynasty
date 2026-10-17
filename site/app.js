@@ -17,7 +17,7 @@
     give: new Set(), get: new Set(),
     pickTeam: "all", valOwner: "all", valPos: "ALL", valQuery: "", valLimit: 100,
     valSort: "val", rosterSort: "val", pickSort: "slot",
-    histTeam: "all", histWith: "all", histSort: "new", mgr: null, weekView: "lineup",
+    histTeam: "all", histWith: "all", histSort: "new", mgr: null, weekView: "lineup", tradeView: "total",
     sort: {},              // per-table column sort: id -> {key, dir}
     lastFocus: null,
   };
@@ -79,6 +79,7 @@
     const got = await Promise.all(FILES.map((f) =>
       fetch(`data/${f}.json${q}`, { cache: bust ? "reload" : "no-cache" }).then((r) => (r.ok ? r.json() : null)).catch(() => null)));
     FILES.forEach((f, i) => (D[f] = got[i]));
+    judged.clear();
     byId = {};
     for (const p of D.values || []) byId[p.id] = { ...p };
     for (const [rid, list] of Object.entries(D.rosters || {})) {
@@ -88,6 +89,7 @@
     for (const t of teams()) { t.team = (t.team || "").trim(); byTeamName[t.team] = t; }
     if (state.team == null) state.team = Number(store.get("team")) || null;
     state.weekView = store.get("weekView") || state.weekView;
+    state.tradeView = store.get("tradeView") || state.tradeView;
     if (!teamOf(state.team)) state.team = null;
   }
   const setTeam = (rid) => { state.team = rid; store.set("team", rid ?? ""); };
@@ -983,127 +985,123 @@
   }
 
   // ---------------------------------------------------------------- Past trades
+  // One toggle picks how every trade is valued; each asset then shows one number and each trade one verdict.
+  const TRADE_VIEWS = [
+    ["total", "Results so far", "What each team got out of the trade: points its new players scored in its starting lineup, plus the value they have left (or had when the team moved them on)."],
+    ["today", "Today's value", "Everything each team got, at today's values, wherever those players are now."],
+    ["day", "On the day", "Everything at the values of the day the trade was made: was it fair when it was struck? Only trades from October 16, 2026 on."],
+  ];
   const involves = (tr, rid) => tr.sides.some((sd) => sd.roster_id === rid);
   const sideOf = (tr, rid) => tr.sides.findIndex((sd) => sd.roster_id === rid);
   const sideName = (sd) => (sd.roster_id != null ? teamHTML(sd.roster_id) : `${esc(sd.team)}${userTag(sd.owner)} <span class="muted">(left the league)</span>`);
   const tradeDate = (tr) => (tr.ts ? new Date(tr.ts).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "");
   const signed = (x) => `${x > 0 ? "+" : x < 0 ? "−" : ""}${fmt(Math.abs(x))}`;
+  const assetVal = (a, view) => (a.k === "faab" ? null : view === "today" ? (a.today ?? a.value) : view === "day" ? a.day : a.value);
+  const pkgSum = (vals) => Math.pow(vals.reduce((x, v) => x + Math.pow(Math.max(0, v), PKG), 0), 1 / PKG);
+  // Judge a trade under one view: per side got/gave/net, plus even/winner/margin. null if values are missing.
+  const judged = new Map();
+  function judge(tr, view) {
+    const key = `${tr.id}:${view}`;
+    if (judged.has(key)) return judged.get(key);
+    const assets = tr.sides.flatMap((sd) => sd.got.filter((a) => a.k !== "faab"));
+    let res = null;
+    if (!assets.some((a) => assetVal(a, view) == null)) {
+      const sides = tr.sides.map((sd, i) => {
+        const got = Math.round(pkgSum(sd.got.filter((a) => a.k !== "faab").map((a) => assetVal(a, view))));
+        const gave = Math.round(pkgSum(tr.sides.flatMap((o) => o.got.filter((a) => a.k !== "faab" && a.from === i)).map((a) => assetVal(a, view))));
+        return { got, gave, net: got - gave };
+      });
+      const big = Math.max(1, ...sides.map((x) => x.got));
+      const even = sides.every((x) => Math.abs(x.net) <= FAIR * big);
+      const best = sides.reduce((b, x, i) => (x.net > sides[b].net ? i : b), 0);
+      res = { sides, even, winner: even ? null : best, margin: sides[best].net };
+    }
+    judged.set(key, res);
+    return res;
+  }
   // from one team's point of view: 1 won, -1 lost, 0 even
-  const outcome = (tr, i) => (tr.even ? 0 : tr.sides[i].net > 0 ? 1 : -1);
+  const outcome = (j, i) => (j.even ? 0 : j.sides[i].net > 0 ? 1 : -1);
 
   function whereNow(rid, receiver) {
     if (rid == null) return "free agent now";
     if (rid === receiver && receiver != null) return "still on the roster";
     return `now on ${teamHTML(rid)}`;
   }
-  // "1,240 banked from 18 starts + 2,100 value now" (or the value when he left the team)
-  function heldLine(a) {
-    if (a.banked == null && !a.left) return "";
-    const parts = [];
-    if (a.banked > 0) parts.push(`${fmt(a.banked)} banked from ${plural(a.starts, "start")}`);
-    else if (a.starts) parts.push(`${plural(a.starts, "start")}, none above a replacement starter`);
-    if (a.left) {
-      const d = new Date(`${a.left.date}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-      parts.push(a.left.valued === "then" ? `${fmt(a.remain)} value when ${a.left.how} ${d}`
-        : `${a.left.how} ${d}, counted at today's value ${fmt(a.remain)}`);
-    } else if (a.banked > 0) {
-      parts.push(`${fmt(a.remain)} value now`);
-    }
-    return parts.length ? `<span class="became muted held">${parts.join(" + ")}</span>` : "";
-  }
-  function pastAsset(a, receiver) {
+  function pastAsset(a, receiver, view) {
     const clickable = (id) => (byId[id] ? `data-player="${esc(id)}"` : "");
+    const v = assetVal(a, view);
+    const num = `<span class="aval">${v == null ? "–" : fmt(v)}</span>`;
+    const row = (id, dot, name, meta, extraCls = "") => {
+      const tag = id && byId[id] ? "button" : "div";
+      return `<${tag} class="past-row ${extraCls}" ${tag === "button" ? `type="button" ${clickable(id)}` : ""}>
+        ${dot}<span><span class="aname">${name}</span><span class="meta"><span>${meta}</span></span></span>${num}</${tag}>`;
+    };
     if (a.k === "faab") {
       return `<div class="past-row"><span class="dot PK">$</span><span><span class="aname">$${fmt(a.amount)} FAAB</span><span class="meta"><span>not counted in value</span></span></span><span class="aval muted">–</span></div>`;
     }
+    const starts = view === "total" && a.starts ? `, ${plural(a.starts, "start")} for them` : "";
     if (a.k === "player") {
-      const tag = byId[a.id] ? "button" : "div";
-      return `<${tag} class="past-row" ${tag === "button" ? `type="button" ${clickable(a.id)}` : ""}>
-        <span class="dot ${esc(a.pos || "")}">${esc(a.pos || "?")}</span>
-        <span><span class="aname">${esc(a.name)}</span><span class="meta"><span>${whereNow(a.now_on, receiver)}</span></span>${heldLine(a)}</span>
-        <span class="aval">${fmt(a.value)}</span></${tag}>`;
+      return row(a.id, `<span class="dot ${esc(a.pos || "")}">${esc(a.pos || "?")}</span>`, esc(a.name), `${whereNow(a.now_on, receiver)}${starts}`);
     }
-    const owner = a.orig_team ? `${esc(a.orig_team)}${/s$/i.test(a.orig_team) ? "'" : "'s"}` : "";
-    const head = `${a.season} round ${a.round}${a.pick ? ` <span class="slotno">${esc(a.pick)}</span>` : ""}`;
+    const owner = a.orig_team ? `${esc(a.orig_team)}${/s$/i.test(a.orig_team) ? "'" : "'s"} pick` : "pick";
+    const name = `${a.season} round ${a.round}${a.pick ? ` <span class="slotno">${esc(a.pick)}</span>` : ""}`;
+    const dot = `<span class="dot PK">PK</span>`;
+    if (view === "day") return row(null, dot, name, `${owner}, before the draft`, "pick");
+    const b = a.became || {};
     if (a.status === "flipped") {
-      const b = a.became || {};
-      const by = a.drafted_by != null ? teamHTML(a.drafted_by) : esc(a.drafted_by_team || "another team");
-      return `<div class="past-row pick">
-        <span class="dot PK">PK</span>
-        <span><span class="aname">${head}</span><span class="meta"><span>${owner} pick, traded on before the draft</span></span>
-          <span class="became muted">${by} took ${esc(b.name || "?")} with it. Counted at what picks near ${esc(a.pick)} are worth.</span></span>
-        <span class="aval">${fmt(a.value)}</span></div>`;
+      const by = a.drafted_by != null ? esc(teamOf(a.drafted_by)?.team || a.drafted_by_team || "another team") : esc(a.drafted_by_team || "another team");
+      return row(null, dot, name, `${owner}, passed on before the draft (${by} took ${esc(b.name || "?")}); valued as the slot`, "pick");
     }
-    if (a.status === "used") {
-      const b = a.became || {};
-      const tag = byId[b.id] ? "button" : "div";
-      return `<${tag} class="past-row pick" ${tag === "button" ? `type="button" ${clickable(b.id)}` : ""}>
-        <span class="dot PK">PK</span>
-        <span><span class="aname">${head}</span><span class="meta"><span>${owner} pick</span></span>
-          <span class="became">Became <b>${esc(b.name || "?")}</b>${b.pos ? ` <span class="dot ${esc(b.pos)}">${esc(b.pos)}</span>` : ""} <span class="muted">${whereNow(b.now_on, receiver)}</span></span>${heldLine(a)}</span>
-        <span class="aval">${fmt(a.value)}</span></${tag}>`;
+    if (a.status === "used" || a.became) {
+      return row(b.id, dot, `${name} <span class="muted">became</span> ${esc(b.name || "?")}`, `${owner}, ${whereNow(b.now_on, receiver)}${starts}`, "pick");
     }
-    if (a.became) {   // any other drafted-pick status: still show who was taken and the value counted
-      const b = a.became;
-      return `<div class="past-row pick"><span class="dot PK">PK</span>
-        <span><span class="aname">${head}</span><span class="meta"><span>${owner} pick</span></span>
-          <span class="became">Became <b>${esc(b.name || "?")}</b></span></span>
-        <span class="aval">${fmt(a.value)}</span></div>`;
-    }
-    const meta = a.status === "future"
-      ? `${owner} pick, not drafted yet${a.exp_slot ? `, projected ${slotLabel(a.round, a.exp_slot)}` : ""}`
-      : `${owner} pick, player taken not found`;
-    return `<div class="past-row pick"><span class="dot PK">PK</span>
-      <span><span class="aname">${head}</span><span class="meta"><span>${meta}</span></span></span>
-      <span class="aval">${a.status === "future" || a.value ? fmt(a.value) : "–"}</span></div>`;
+    return row(null, dot, name, a.status === "future"
+      ? `${owner}, not drafted yet${a.exp_slot ? `, projected ${slotLabel(a.round, a.exp_slot)}` : ""}`
+      : `${owner}, player taken not found`, "pick");
   }
-  function tradeCard(tr, focus) {
+  function tradeCard(tr, focus, view) {
+    const j = judge(tr, view);
     const fi = focus != null ? sideOf(tr, focus) : -1;
     const order = tr.sides.map((_, i) => i).sort((a, b) => (b === fi) - (a === fi));
-    let verdict, dayV = "";
-    const D_ = tr.day;
+    let verdict;
     if (fi >= 0) {
-      const o = outcome(tr, fi), m = tr.sides[fi].net;
+      const o = outcome(j, fi), m = j.sides[fi].net;
       verdict = o === 0 ? `<span class="verdict-chip even">Even</span>`
         : `<span class="verdict-chip ${o > 0 ? "won" : "lost"}">${o > 0 ? "Won" : "Lost"} by ${fmt(Math.abs(m))}</span>`;
-      if (D_) {
-        const dn = tr.sides[fi].day_net;
-        dayV = D_.even ? "Fair on the day" : `${dn > 0 ? "Won" : "Lost"} by ${fmt(Math.abs(dn))} on the day`;
-      }
     } else {
-      verdict = tr.even ? `<span class="verdict-chip even">Even</span>`
-        : `<span class="verdict-chip won">${esc(tr.sides[tr.winner]?.team || "")} won by ${fmt(tr.margin)}</span>`;
-      if (D_) dayV = D_.even ? "Fair on the day" : `${esc(tr.sides[D_.winner]?.team || "")} won by ${fmt(D_.margin)} on the day`;
+      verdict = j.even ? `<span class="verdict-chip even">Even</span>`
+        : `<span class="verdict-chip won">${esc(tr.sides[j.winner]?.team || "")} won by ${fmt(j.margin)}</span>`;
     }
-    if (dayV) verdict = `<span class="verdicts">${verdict}<span class="dayv">${dayV}</span></span>`;
     return `
       <article class="tcard">
         <header><span><b>${tr.season}${tr.week ? `, week ${tr.week}` : ""}</b> <span class="muted">${tradeDate(tr)}</span></span>${verdict}</header>
         <div class="tsides" style="--n:${tr.sides.length}">
           ${order.map((i) => {
-            const sd = tr.sides[i];
+            const sd = tr.sides[i], js = j.sides[i];
             return `<section class="tside ${i === fi ? "focus" : ""}">
               <h3>${sideName(sd)} <span class="muted">got</span></h3>
-              ${sd.got.map((a) => pastAsset(a, sd.roster_id)).join("") || `<p class="note">Nothing</p>`}
-              <div class="tsum"><span>Worth ${fmt(sd.got_value)}${sd.banked > 0 ? `, ${fmt(sd.banked)} of it banked` : " today"}${sd.got.filter((a) => a.k !== "faab").length > 1 ? ` <span class="muted">(${fmt(sd.got_raw)} before the package discount)</span>` : ""}${sd.day_got != null ? `<br><span class="muted">On the day: ${fmt(sd.day_got)} got, ${fmt(sd.day_gave)} given</span>` : ""}</span>
-                <b class="${signCls(sd.net)}">${signed(sd.net)}</b></div>
+              ${sd.got.map((a) => pastAsset(a, sd.roster_id, view)).join("") || `<p class="note">Nothing</p>`}
+              <div class="tsum"><span>Got ${fmt(js.got)}, gave ${fmt(js.gave)}</span>
+                <b class="${signCls(js.net)}">${signed(js.net)}</b></div>
             </section>`;
           }).join("")}
         </div>
       </article>`;
   }
   function renderPastTrades() {
-    const all = D.trades || [];
+    const view = TRADE_VIEWS.some(([k]) => k === state.tradeView) ? state.tradeView : "total";
+    const viewInfo = TRADE_VIEWS.find(([k]) => k === view);
+    const all = (D.trades || []).filter((tr) => judge(tr, view));
     const tid = state.histTeam === "all" ? null : Number(state.histTeam);
     const wid = tid == null || state.histWith === "all" ? null : Number(state.histWith);
     let list = all;
     if (tid != null) list = list.filter((tr) => involves(tr, tid));
     if (wid != null) list = list.filter((tr) => involves(tr, wid));
-    const net = (tr) => (tid != null ? tr.sides[sideOf(tr, tid)].net : Math.abs(tr.margin));
+    const net = (tr) => (tid != null ? judge(tr, view).sides[sideOf(tr, tid)].net : Math.abs(judge(tr, view).margin));
     const sorters = {
       new: (a, b) => (b.ts || 0) - (a.ts || 0),
       old: (a, b) => (a.ts || 0) - (b.ts || 0),
-      swing: (a, b) => Math.abs(b.margin) - Math.abs(a.margin),
+      swing: (a, b) => Math.abs(judge(b, view).margin) - Math.abs(judge(a, view).margin),
       best: (a, b) => net(b) - net(a),
       worst: (a, b) => net(a) - net(b),
     };
@@ -1113,41 +1111,48 @@
     if (!sortOpts.some(([k]) => k === state.histSort)) state.histSort = "new";
     list = [...list].sort(sorters[state.histSort]);
 
-    let summary;
-    if (tid != null) {
-      const res = list.map((tr) => outcome(tr, sideOf(tr, tid)));
-      const total = list.reduce((x, tr) => x + tr.sides[sideOf(tr, tid)].net, 0);
+    let summary = "";
+    if (list.length && tid != null) {
+      const res = list.map((tr) => outcome(judge(tr, view), sideOf(tr, tid)));
+      const total = list.reduce((x, tr) => x + judge(tr, view).sides[sideOf(tr, tid)].net, 0);
       const picksIn = list.reduce((x, tr) => x + tr.sides[sideOf(tr, tid)].got.filter((a) => a.k === "pick").length, 0);
       const picksOut = list.reduce((x, tr) => x + tr.sides.reduce((y, sd) => y + sd.got.filter((a) => a.k === "pick" && a.from === sideOf(tr, tid)).length, 0), 0);
       summary = board([
         { v: list.length, l: plural(list.length, "trade").replace(/^\d+ /, "") + (wid != null ? ` with ${esc(teamOf(wid)?.team || "")}` : ""), mark: true },
         { v: `${res.filter((x) => x > 0).length}–${res.filter((x) => x < 0).length}–${res.filter((x) => x === 0).length}`, cls: "long", l: "Won, lost, even" },
-        { v: `${total > 0 ? "+" : total < 0 ? "−" : ""}${Math.abs(total) >= 1000 ? `${(Math.abs(total) / 1000).toFixed(1)}k` : fmt(Math.abs(total))}`, cls: `${signCls(total)} long`, l: "Net value, banked + left" },
+        { v: `${total > 0 ? "+" : total < 0 ? "−" : ""}${Math.abs(total) >= 1000 ? `${(Math.abs(total) / 1000).toFixed(1)}k` : fmt(Math.abs(total))}`, cls: `${signCls(total)} long`, l: "Net value" },
         { v: `${picksIn}/${picksOut}`, l: "Picks got, picks given" },
       ]);
-    } else {
-      const evenN = list.filter((tr) => tr.even).length;
-      const usedPicks = list.reduce((x, tr) => x + tr.sides.reduce((y, sd) => y + sd.got.filter((a) => a.k === "pick" && (a.status === "used" || a.status === "flipped")).length, 0), 0);
+    } else if (list.length) {
+      const evenN = list.filter((tr) => judge(tr, view).even).length;
       summary = board([
-        { v: list.length, l: "Trades in league history" },
-        { v: pct(list.length ? evenN / list.length : null), l: "Even at today's values" },
-        { v: usedPicks, l: "Traded picks already used" },
+        { v: list.length, l: "Trades" },
+        { v: pct(evenN / list.length), l: "Even (within 10%)" },
+        { v: list.filter((tr) => !judge(tr, view).even).length, l: "Lopsided" },
       ]);
     }
+    const empty = view === "day" && !all.length
+      ? `<div class="empty"><b>No trades to judge yet</b>Values have been saved daily since October 16, 2026. Trades made from then on show here.</div>`
+      : `<div class="empty"><b>No trades</b>${tid != null ? "This team hasn't made a trade" : "No trades yet"}${wid != null ? " with that team" : ""}.</div>`;
     return `
       <div class="controls">
+        <div class="seg fill" role="group" aria-label="Value trades by">
+          ${TRADE_VIEWS.map(([k, l]) => `<button data-tv="${k}" class="${view === k ? "on" : ""}" aria-pressed="${view === k}">${l}</button>`).join("")}
+        </div>
+      </div>
+      <p class="note tv-note">${viewInfo[2]}</p>
+      <div class="controls" style="margin-top:12px">
         <select id="hist-team" aria-label="Team"><option value="all" ${tid == null ? "selected" : ""}>All teams</option>${teamOptions(tid)}</select>
         ${tid != null ? `<select id="hist-with" aria-label="Trades with"><option value="all" ${wid == null ? "selected" : ""}>With any team</option>${teams().filter((t) => t.roster_id !== tid).sort((a, b) => a.team.localeCompare(b.team)).map((t) => `<option value="${t.roster_id}" ${t.roster_id === wid ? "selected" : ""}>With ${esc(teamText(t.roster_id))}</option>`).join("")}</select>` : ""}
         ${sortSelect("hist-sort", state.histSort, sortOpts)}
       </div>
       ${summary}
-      <div class="tlist">${list.map((tr) => tradeCard(tr, tid)).join("") || `<div class="empty"><b>No trades</b>${tid != null ? "This team hasn't made a trade" : "No trades yet"}${wid != null ? " with that team" : ""}.</div>`}</div>
+      <div class="tlist">${list.map((tr) => tradeCard(tr, tid, view)).join("") || empty}</div>
       ${how("How past trades are judged", [
-        `Each player counts as what he has already given the team plus what's left. Banked: his points in that team's starting lineup since the trade, above a replacement starter at his position (playoff starts count double), turned into value at the same rate the model uses. What's left: his value today while he's still on the team, or his value on the day he was traded or dropped (values have been saved daily since October 2026; for earlier moves it's today's value). A player who retires keeps everything he banked.`,
-        `On the day: trades made since daily values began are also judged at the values of the day they were made, which tells you whether the deal was fair when it was struck. The main verdict tells you how it has turned out.`,
-        `A draft pick a team used counts as the player it took, with his starts banked from draft day. A pick a team traded on before the draft counts at what that slot turned out to be worth (the average value today of the players taken within three picks of it), since another team chose the player. A pick not yet used counts at its pick value and projected slot.`,
-        `Each side's haul is combined the same way as in the trade lab: two equal pieces count as about 1.7 of one, because only so many players start. The number on each side is what it got minus what it gave. A trade is even when every side is within 10%.`,
-        `FAAB moved in a trade is shown but not valued. Tap a player to see his value breakdown.`,
+        `<b>Results so far</b> counts what each team actually got out of the deal. For each player: the points he scored in that team's starting lineup after the trade, above a replacement starter at his position (playoff starts count double), turned into value at the rate the model uses; plus the value he has left, or had on the day the team traded or dropped him. A player who retires keeps what he banked, so trading for an aging star isn't marked as a loss once he's done.`,
+        `<b>Today's value</b> counts everything at today's values, wherever the players are now. <b>On the day</b> uses the values saved on the day of the trade (daily since October 16, 2026), which shows whether the deal was fair when it was made.`,
+        `Draft picks: a pick a team used counts as the player it took. A pick a team passed on before the draft counts at what that slot turned out to be worth (players taken within three picks of it), since another team made the choice. A pick not yet used counts at its pick value.`,
+        `Each side's haul is combined as in the trade lab: two equal pieces count as about 1.7 of one. A trade is even when every side is within 10%. FAAB is shown but not valued.`,
       ])}`;
   }
 
@@ -1304,6 +1309,8 @@
     }
     const r = t.closest("[data-roster]");
     if (r) { setTeam(Number(r.dataset.roster)); }
+    const tv = t.closest("[data-tv]");
+    if (tv) { state.tradeView = tv.dataset.tv; store.set("tradeView", state.tradeView); rerender(); return; }
     const wkt = t.closest("[data-wkteam]");
     if (wkt) { setTeam(Number(wkt.dataset.wkteam)); state.weekView = "lineup"; rerender(); window.scrollTo(0, 0); return; }
     const wv = t.closest("[data-wv]");

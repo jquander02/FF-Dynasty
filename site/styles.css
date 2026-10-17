@@ -517,3 +517,6 @@ button.past-row:focus-visible { outline: 2px solid var(--turf); outline-offset: 
 .mside em { font: 700 16px var(--display); font-style: normal; text-align: right; font-variant-numeric: tabular-nums; }
 .mside.me b { box-shadow: inset 0 -4px 0 var(--marker); padding: 0 2px; }
 @media (min-width: 760px) { .mlist { grid-template-columns: 1fr 1fr; } }
+.seg.fill { display: flex; width: 100%; }
+.seg.fill button { flex: 1; padding: 9px 6px; font-size: 13.5px; }
+.tv-note { margin: -4px 0 0; }

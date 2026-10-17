@@ -267,6 +267,7 @@ def trade_log(store: Store) -> list[dict]:
             frm = idx.get(m["from_roster_id"])
             if m["kind"] == "add":
                 a = {"k": "player", "from": frm, **player(m["player_id"])}
+                a["today"] = a["value"]          # today's value, before banked/remaining replaces it
                 a.update(hold(m["roster_id"], m["player_id"], t_ms, t_sw))
                 if snap_day:
                     a["day"] = round(hist.players[snap_day].get(m["player_id"], 0.0))
@@ -288,11 +289,12 @@ def trade_log(store: Store) -> list[dict]:
                     b = player(hit["player_id"])
                     h = hold(m["roster_id"], hit["player_id"], hit.get("drafted_ms") or t_ms,
                              (season_n.get(hit["league_id"], int(season)), 0))
-                    a.update(status="used", pick=hit["pick"], became=b, **h)
+                    a.update(status="used", pick=hit["pick"], became=b, today=b["value"], **h)
                 elif fut:
                     a.update(status="future", exp_slot=fut["exp_slot"], value=round(fut["value"] or 0))
                 else:
                     a.update(status="unknown", value=0)
+                a.setdefault("today", a["value"])
                 if snap_day:
                     key = (season, rnd, orig_cur if orig_cur is not None else orig)
                     if key in hist.picks.get(snap_day, {}):

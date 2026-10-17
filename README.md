@@ -44,8 +44,9 @@ that column (tap again to reverse); player and pick lists have a "Sort by" menu.
   since the trade, above a replacement starter at his position, playoff starts double, converted
   at the model's value-per-point rate) plus what's left (today's value while he's on the team, or
   his value on the day he was traded or dropped; a retired player keeps what he banked). Trades
-  made since daily values began (October 2026) also get an "on the day" verdict at that day's
-  values. A pick the team used shows the player it took ("2026 round 1, 1.03, became
+  made since daily values began (October 2026) can also be judged at that day's values. A
+  toggle switches every card between Results so far (banked + left), Today's value and On the
+  day; each asset shows one number and each trade one verdict. A pick the team used shows the player it took ("2026 round 1, 1.03, became
   ..."); a pick the team traded on before the draft counts at what that slot was worth (today's
   average value of the players taken within three picks of it), since another team chose the
   player; future picks show their projected slot. Each trade gets a verdict (won, lost or even
