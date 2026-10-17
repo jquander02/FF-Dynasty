@@ -16,6 +16,13 @@ that column (tap again to reverse); player and pick lists have a "Sort by" menu.
 - **League:** week, trade deadline, best record and most roster value; standings with playoff
   odds, value and each team's contention window, and a chart of every team's lineup strength
   now vs. the next two seasons
+- **Week:** this week for any team, in three views. *Lineup*: the set lineup against the best
+  one, with byes, players ruled out and game-time decisions flagged, what to start and sit,
+  and how much the swap adds in points and win odds. *Matchups*: every game's projected score
+  and win odds, live as games finish. *Waivers*: the free agents who'd add most to the team's
+  lineup this season plus value beyond it, a FAAB bid for each, the rivals who'd want him,
+  who to drop, the best kickers, defenses and fill-ins available this week, and the league's
+  biggest winning bids
 - **Team:** pick any team: roster with values, ages, injury and taxi tags, model-vs-market leans
 - **Values:** every player ranked by dynasty value; search, filter by position and team, sort
   by value, age, projection, points per game or 7-day change
@@ -158,6 +165,34 @@ redo windows, odds and pick values with the latest scores.
 
 Tables: `owner_profile`, `trade_review`, `trade_suggestion`.
 
+## This week (dynasty/weekly.py)
+
+- **Projection for one game:** the model's rest-of-season points per game, times (team's
+  betting-line implied points this week ÷ its season-average implied points)^0.5, times the
+  chance he plays (questionable 80%, doubtful 20%, out/IR 0); zero on a bye. Kickers use
+  their league-scored points per game, defenses this league's points for them; a defense
+  scales with the inverse of the opponent's implied total. Lines and kickoff times come from
+  nflverse schedules (`nfl_schedules`).
+- **Tested:** fit on 2015–20 player-weeks, checked on 2021–25. The relative betting-line
+  factor cut weekly RMSE from 7.28 to 7.26; a raw implied total, larger exponents and the
+  opponent's points allowed to the position were no better or worse.
+- **Spread:** a player's score varies around his projection by a + b × projection (fit by
+  position: QB 6.96 + 0.08p, RB 3.18 + 0.35p, WR 2.89 + 0.39p, TE 2.13 + 0.45p). Teammates'
+  misses barely correlate (0.04), so team variances add. Win odds use a normal approximation.
+- **Live:** finished games count actual points, games in progress count points so far plus
+  the unplayed share of the projection, and started players are locked like on Sleeper.
+  Quick refreshes every two hours on game days update scores; injury news updates each morning.
+- **Waivers:** for every team and free agent, the points he adds to that team's best lineup in
+  each remaining week (playoff weeks weighted by playoff odds) plus his model value beyond
+  this season. Bids pay only for the edge over the next-best free agent (lineup gain over the
+  best other free agent at his position, future value over the best other stash), since that
+  one is free: bid = remaining FAAB × edge ÷ (edge + 150), capped at 75%, held to just above
+  the most interested rival's worth when that's lower. Drop = the active player whose loss
+  costs least.
+- **Season sim:** this week's projected scores replace the flat team average for this week.
+
+Tables: `week_team`; the full report is `raw_snapshot['weekly']`, exported as `weekly.json`.
+
 ---
 
 ## Where it lives
@@ -233,6 +268,7 @@ row counts. The database is plain SQLite, so you can also open `data\dynasty.db`
 
 **nflverse** (via `nflreadpy`, last 5 seasons + current):
 weekly player stats, snap counts, expected fantasy points (`ff_opportunity`), rosters,
+schedules with betting lines,
 NFL draft picks and combine (12 seasons), depth charts, injuries, Next Gen Stats,
 PFR advanced stats, contracts, consensus rankings, and the cross-site ID table.
 Each lands in an `nfl_*` table.
@@ -250,6 +286,7 @@ dynasty/
   nflverse.py        nflverse datasets, one season at a time
   idmap.py           Sleeper ↔ nflverse id mapping
   store.py           SQLite schema and writers
+  weekly.py          This week: projections, lineup checks, matchup odds, waiver bids
   export.py          JSON files the app reads (site/data/)
   __main__.py        Command line: refresh | export | status
 site/                The installable web app (HTML/CSS/JS, offline-capable)

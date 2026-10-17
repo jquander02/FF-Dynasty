@@ -18,8 +18,9 @@ unplayed share of the projection; started players are locked in place, like on S
 
 Waivers: for every team and free agent, the points he'd add to that team's best lineup in each
 remaining week (playoff weeks weighted by the team's playoff odds), plus his model value beyond
-this season. The bid is a share of the team's remaining budget that grows with that worth, held to
-just above what the most interested rival should pay.
+this season. The bid pays only for what he adds over the next-best free agent (who costs nothing):
+a share of the team's remaining budget that grows with that edge, held to just above what the
+most interested rival should pay.
 """
 
 from __future__ import annotations
@@ -588,18 +589,39 @@ def build(store: Store, now: datetime | None = None) -> dict:
         frac = min(MAX_SHARE, score / (score + WORTH_HALF))
         return int(round(max(0, left.get(rid, 0)) * frac))
 
+    # FAAB pays only for what a player gives over the next-best free agent, who costs nothing:
+    # lineup gain over the best other free agent at his position, future value over the best
+    # other stash. Ten similar defenses are worth a $0 bid; the one breakout back is not.
+    fut_of = {p: P.future_value(p) for p in candidates}
+    fut_top = sorted(((v, p) for p, v in fut_of.items()), reverse=True)[:2]
+    gain_top = {}
+    for rid in active:
+        by = defaultdict(list)
+        for p in candidates:
+            by[P.pos(p)].append((gains[p].get(rid, 0.0), p))
+        gain_top[rid] = {pos: sorted(v, reverse=True)[:2] for pos, v in by.items()}
+
+    def best_other(top, p):
+        return next((v for v, q in top if q != p), 0.0)
+
+    def excess(rid, p):
+        g = gains[p].get(rid, 0.0) - best_other(gain_top[rid].get(P.pos(p), []), p)
+        f = fut_of[p] - best_other(fut_top, p)
+        return max(0.0, g) + max(0.0, f)
+
     waivers = {}
     for rid in active:
         recs = []
         d = drops.get(rid) or {}
         for p in candidates:
-            fut = P.future_value(p)
+            fut = fut_of[p]
             score = gains[p].get(rid, 0.0) + fut
             net = score - (0.0 if d.get("open") else d.get("loss", 0.0))
             if score < 2.0 or net <= 1.0:
                 continue
-            mine = worth(rid, score)
-            rivals = sorted(((worth(o, gains[p].get(o, 0.0) + fut), o) for o in active if o != rid), reverse=True)
+            ex = excess(rid, p)
+            mine = worth(rid, ex)
+            rivals = sorted(((worth(o, excess(o, p)), o) for o in active if o != rid), reverse=True)
             rivals = [(wv, o) for wv, o in rivals if wv > 0][:2]
             top = rivals[0][0] if rivals else 0
             if not budget:
@@ -609,7 +631,8 @@ def build(store: Store, now: datetime | None = None) -> dict:
             else:
                 bid = min(mine, max(top + 1, int(round(mine * 0.5))))
             recs.append({"pid": p, "gain": round(gains[p].get(rid, 0.0), 1), "future": round(fut, 1),
-                         "score": round(score, 1), "net": round(net, 1), "worth": mine, "bid": bid,
+                         "score": round(score, 1), "excess": round(ex, 1), "net": round(net, 1),
+                         "worth": mine, "bid": bid,
                          "rivals": [{"rid": o, "worth": wv} for wv, o in rivals],
                          "drop": None if d.get("open") else d.get("pid")})
         recs.sort(key=lambda r: -r["net"])

@@ -419,7 +419,7 @@
       <div class="group">${recs.map((r) => `<div class="lrow wv">
           <span class="lname">${wkName(r.pid)}
             <span class="meta why"><span>+${f1(r.gain)} lineup pts this season</span><span>${f1(r.future)} value beyond</span></span>
-            <span class="meta"><span>${rivalText(r)}</span></span></span>
+            <span class="meta"><span>${r.bid === 0 ? "No better than other free agents: claim for $0" : rivalText(r)}</span></span></span>
           <span class="val">${r.bid != null ? `<b>$${fmt(r.bid)}</b><small>bid</small>` : `<b>${f1(r.net)}</b><small>pts</small>`}</span></div>`).join("")
         || `<div class="empty"><b>Nobody worth a claim</b>No free agent beats what this roster already has. Check again after injuries.</div>`}</div>
       <h2>Best available this week</h2>
@@ -447,7 +447,7 @@
         `Each player's projection is the model's rest-of-season points per game, nudged by his team's betting-line point total for this game against its usual total (a team expected to score 10% more gets about 5% more). Kickers and defenses use their points so far, adjusted the same way; a defense facing a low-scoring offense projects higher. Byes and players ruled out count zero.`,
         `Tested on past seasons: the betting-line nudge cut weekly projection error slightly (7.28 to 7.26 points); the opponent's points allowed to the position added nothing, so it's left out. A single week is mostly noise: a 12-point projection lands anywhere from about 3 to 21.`,
         `Win odds assume each player's score varies around his projection by the amount seen in past games. Points already scored count as final; games in progress count what's scored plus the unplayed share. Players whose games have started are locked, as on Sleeper.`,
-        `Waiver adds: the points a player would add to this team's best lineup in each remaining week (playoff weeks weighted by playoff odds), plus his model value beyond this season. The bid is a share of remaining FAAB that grows with that worth, kept just above what the most interested rival should pay. Injury news updates each morning; scores update every two hours on game days.`,
+        `Waiver adds: the points a player would add to this team's best lineup in each remaining week (playoff weeks weighted by playoff odds), plus his model value beyond this season. The bid pays only for his edge over the next-best free agent, since that one costs nothing: a share of remaining FAAB that grows with the edge, kept just above what the most interested rival should pay. Injury news updates each morning; scores update every two hours on game days.`,
       ])}`;
   }
 
