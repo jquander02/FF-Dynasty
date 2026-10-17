@@ -11,7 +11,7 @@ import logging
 import sys
 import time
 
-from . import export, idmap, ingest_sleeper, market, model, nflverse, owners, picks, production, teams, trade, values
+from . import export, idmap, ingest_sleeper, market, model, nflverse, owners, picks, production, teams, trade, values, weekly
 from .config import load_config
 from .sleeper import SleeperClient
 from .store import Store
@@ -44,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
                 n = store.query(f"SELECT COUNT(*) c FROM {k}")[0]["c"]
                 print(f"{k:18} {n:>8}")
             for k in ("market_value", "player_week", "player_season", "player_projection", "player_value",
-                      "team_window", "season_sim", "pick_value", "schedule", "owner_profile",
+                      "team_window", "week_team", "season_sim", "pick_value", "schedule", "owner_profile",
                       "trade_review", "trade_suggestion"):
                 if store.query("SELECT 1 FROM sqlite_master WHERE name=?", (k,)):
                     print(f"{k:18} {store.query(f'SELECT COUNT(*) c FROM {k}')[0]['c']:>8}")
@@ -90,6 +90,11 @@ def main(argv: list[str] | None = None) -> int:
             if store.query("SELECT 1 FROM sqlite_master WHERE name='player_value'"):
                 tw = teams.build(store)
                 print(f"Teams: {len(tw)} windows")
+                try:   # this week's lineups, matchups and waivers; feeds the season simulation below
+                    wk = weekly.build(store)
+                    print("Week: " + ", ".join(f"{k} {v}" for k, v in wk.items()))
+                except Exception as exc:  # noqa: BLE001 - never block the refresh
+                    logging.getLogger("dynasty").warning("weekly build failed: %s", exc, exc_info=True)
                 pk = picks.build(store, cfg.value_weights)
                 print("Picks: " + ", ".join(f"{k} {v}" for k, v in pk.items()))
                 ow = owners.build(store)

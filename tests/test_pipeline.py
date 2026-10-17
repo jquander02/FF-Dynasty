@@ -42,6 +42,13 @@ class FakeNfl:
         self._log("rosters", seasons)
         return [{"gsis_id": "00-0033280", "season": seasons[0], "team": "SF"}]
 
+    def load_schedules(self, seasons):
+        self._log("schedules", seasons)
+        s = seasons[0]
+        return [{"season": s, "game_type": "REG", "week": w, "gameday": f"{s}-10-{w + 10:02d}", "gametime": "13:00",
+                 "home_team": "SF", "away_team": "MIN", "spread_line": 3.5, "total_line": 45.5}
+                for w in range(1, 18) if w != 9]
+
     def load_draft_picks(self, seasons):
         self._log("draft_picks", seasons)
         return [{"season": seasons[0], "round": 1, "pick": 8, "gsis_id": "00-0033280"}]

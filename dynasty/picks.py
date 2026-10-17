@@ -111,10 +111,12 @@ def playoff_places(seeds: list, mean: dict, sd: float, rng: random.Random) -> li
 
 
 def simulate_season(teams: dict, schedule: dict, weeks: list[int], sd: float, playoff_teams: int,
-                    sims: int = SIMS, seed: int = 7, rule: str = "reverse_standings") -> dict:
+                    sims: int = SIMS, seed: int = 7, rule: str = "reverse_standings",
+                    fixed: dict | None = None) -> dict:
     """teams: rid -> {wins, ties, pf, mean}. schedule: week -> [(a, b), ...].
     rule: 'reverse_standings' (worst record picks 1st) or 'playoff_finish' (non-playoff teams by
     reverse record, then playoff teams by finish, champion last).
+    fixed: week -> {rid: (mean, sd)} for a week already projected lineup by lineup (this week).
     Returns rid -> {slots (draft slot counts), playoffs, titles, wins (total over sims)}."""
     rng = random.Random(seed)
     rids = list(teams)
@@ -129,9 +131,12 @@ def simulate_season(teams: dict, schedule: dict, weeks: list[int], sd: float, pl
                 order = rids[:]
                 rng.shuffle(order)
                 pairs = [(order[i], order[i + 1]) for i in range(0, n - 1, 2)]
+            fx = (fixed or {}).get(w) or {}
             for a, b in pairs:
-                sa = rng.gauss(teams[a]["mean"], sd)
-                sb = rng.gauss(teams[b]["mean"], sd)
+                ma, sda = fx.get(a, (teams[a]["mean"], sd))
+                mb, sdb = fx.get(b, (teams[b]["mean"], sd))
+                sa = rng.gauss(ma, sda)
+                sb = rng.gauss(mb, sdb)
                 pf[a] += sa
                 pf[b] += sb
                 if sa > sb:
@@ -344,7 +349,13 @@ def build(store: Store, weights: dict | None = None) -> dict:
     weeks = list(range(scored + 1, last_reg + 1))
     check = draft_rule_check(store)
     rule = check.get("rule", "playoff_finish")
-    sim = simulate_season(teams, schedule, weeks, sd, playoff_teams, rule=rule) if teams else {}
+    # this week's lineups, injuries, byes and points already scored (dynasty/weekly.py)
+    fixed = defaultdict(dict)
+    if _has(store, "week_team"):
+        for r in store.query("SELECT roster_id, week, mean, sd FROM week_team"):
+            if r["week"] in weeks and r["mean"] is not None:
+                fixed[r["week"]][r["roster_id"]] = (r["mean"], max(r["sd"] or 0.0, 0.5))
+    sim = simulate_season(teams, schedule, weeks, sd, playoff_teams, rule=rule, fixed=fixed) if teams else {}
 
     sims = sum(sim[next(iter(sim))]["slots"]) if sim else 1
     store.write_frame("season_sim", [

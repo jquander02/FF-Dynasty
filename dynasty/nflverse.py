@@ -33,6 +33,8 @@ def _datasets() -> list[Dataset]:
         Dataset("nfl_snap_counts", lambda nfl, s: nfl.load_snap_counts([s])),
         Dataset("nfl_ff_opportunity", lambda nfl, s: nfl.load_ff_opportunity([s], stat_type="weekly")),
         Dataset("nfl_rosters", lambda nfl, s: nfl.load_rosters([s])),
+        # Game times, byes and betting lines (weekly projections, lineup locks)
+        Dataset("nfl_schedules", lambda nfl, s: nfl.load_schedules([s]), history=1),
         # Prospect profile (longer history, small files)
         Dataset("nfl_draft_picks", lambda nfl, s: nfl.load_draft_picks([s]), history=12),
         Dataset("nfl_combine", lambda nfl, s: nfl.load_combine([s]), history=12),

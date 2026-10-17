@@ -321,6 +321,9 @@ def run(store: Store, site_dir: Path) -> dict[str, int]:
                 d[k] = json.loads(d[k] or "[]")
             finder.append(d)
     _write(out, "finder.json", finder)
+    # this week: lineups, matchup odds, waiver targets (dynasty/weekly.py)
+    wk = store.query("SELECT body FROM raw_snapshot WHERE endpoint='weekly'")
+    _write(out, "weekly.json", json.loads(wk[0]["body"]) if wk and wk[0]["body"] else {"week": None})
     return {"teams": len(teams), "picks": len(picks), "activity": len(activity), "seasons": len(history),
             "values": len(value_list)}
 

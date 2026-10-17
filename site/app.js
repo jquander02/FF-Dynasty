@@ -9,7 +9,7 @@
   const panel = sheet.querySelector(".sheet-panel");
   const POS_ORDER = ["QB", "RB", "WR", "TE", "K", "DEF"];
   const SKILLPOS = ["QB", "RB", "WR", "TE"];
-  const FILES = ["meta", "teams", "rosters", "picks", "activity", "history", "values", "plan", "owners", "finder", "trades"];
+  const FILES = ["meta", "teams", "rosters", "picks", "activity", "history", "values", "plan", "owners", "finder", "trades", "weekly"];
 
   const state = {
     team: null,            // the team being viewed on Team / Plan, and "Team A" in the trade lab
@@ -17,7 +17,7 @@
     give: new Set(), get: new Set(),
     pickTeam: "all", valOwner: "all", valPos: "ALL", valQuery: "", valLimit: 100,
     valSort: "val", rosterSort: "val", pickSort: "slot",
-    histTeam: "all", histWith: "all", histSort: "new", mgr: null,
+    histTeam: "all", histWith: "all", histSort: "new", mgr: null, weekView: "lineup",
     sort: {},              // per-table column sort: id -> {key, dir}
     lastFocus: null,
   };
@@ -87,6 +87,7 @@
     byTeamName = {};
     for (const t of teams()) { t.team = (t.team || "").trim(); byTeamName[t.team] = t; }
     if (state.team == null) state.team = Number(store.get("team")) || null;
+    state.weekView = store.get("weekView") || state.weekView;
     if (!teamOf(state.team)) state.team = null;
   }
   const setTeam = (rid) => { state.team = rid; store.set("team", rid ?? ""); };
@@ -298,6 +299,156 @@
           ).join("")}
         </div></div>`).join("") || `<div class="empty"><b>Empty roster</b>This team has no players yet.</div>`}
       </div>`;
+  }
+
+  // ---------------------------------------------------------------- Week
+  // This week: the viewed team's lineup check, every matchup's odds, and waiver targets with FAAB bids.
+  const SLOT_LABEL = { FLEX: "FLEX", SUPER_FLEX: "SFLX", REC_FLEX: "R/T", WRRB_FLEX: "W/R" };
+  const wk = () => D.weekly || {};
+  const wp = (pid) => (wk().players || {})[pid] || {};
+  const wt = (rid) => (wk().teams || {})[rid];
+  function kickText(iso) {
+    if (!iso) return "";
+    return new Date(iso).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
+  }
+  function gameText(x) {
+    if (!x || !x.team) return "No team";
+    if (x.st === "bye") return "Bye";
+    if (x.st === "final") return `${esc(x.opp || "")} final`;
+    if (x.st === "live") return `${esc(x.opp || "")} live`;
+    return `${esc(x.opp || "")} ${kickText(x.kick)}`;
+  }
+  // A player in a weekly list: name button (opens the sheet when we know him), team and game.
+  function wkName(pid, extra = "") {
+    const x = wp(pid);
+    const inj = x.inj ? `<span class="chip out">${esc(x.inj)}</span>` : "";
+    const nm = byId[pid] ? `<button class="linkish" type="button" data-player="${esc(pid)}">${esc(x.name || pid)}</button>` : esc(x.name || pid);
+    return `<span class="dot ${esc(x.pos)}">${esc(x.pos || "?")}</span>${nm}${inj}${extra}
+      <span class="meta"><span>${esc(x.pos === "DEF" ? "" : x.team || "FA") || "Defense"}</span><span>${gameText(x)}</span></span>`;
+  }
+  function wkPoints(pid) {
+    const x = wp(pid);
+    if (x.st === "final") return `<b>${f1(x.pts)}</b><small>scored</small>`;
+    if (x.st === "live") return `<b>${f1(x.pts)}</b><small>so far, ${f1(x.proj)} exp.</small>`;
+    return `<b>${f1(x.proj)}</b><small>proj</small>`;
+  }
+  function scoreboard(rid) {
+    const T = wt(rid);
+    if (!T) return "";
+    const opp = T.opp != null ? wt(T.opp) : null;
+    const side = (r, t, me) => `
+      <div class="side ${me ? "me" : ""}">
+        <span class="who">${teamHTML(r)}</span>
+        <b>${f1(t.mean)}</b>
+        <small>${t.now > 0 ? `${f1(t.now)} scored so far` : "projected"}</small>
+      </div>`;
+    if (!opp) return `<div class="score solo">${side(rid, T, true)}<p class="note">No opponent this week.</p></div>`;
+    return `
+      <div class="score">
+        ${side(rid, T, true)}
+        <span class="vs">vs</span>
+        ${side(T.opp, opp, false)}
+        <div class="tug" role="img" aria-label="Win odds ${pct(T.win)}"><i style="width:${Math.round(T.win * 100)}%"></i></div>
+        <div class="odds2"><span>${pct(T.win)} to win</span><span>${pct(opp.win)}</span></div>
+      </div>`;
+  }
+  function weekLineup(rid) {
+    const T = wt(rid);
+    if (!T) return `<div class="empty"><b>No lineup</b>This team isn't playing this week.</div>`;
+    const B = T.best;
+    const start = new Set(B.start), sit = new Set(B.sit);
+    const name = (p) => esc(wp(p).name || p);
+    const lede = B.gain >= 0.5
+      ? `<p class="lede"><b>${B.start.length ? `Start ${B.start.map(name).join(", ")}` : "Fill the empty slot"}${B.sit.length ? ` over ${B.sit.map(name).join(", ")}` : ""}.</b>
+           That's <b>+${f1(B.gain)} projected points</b>${T.win != null ? `, and win odds go from ${pct(T.win)} to ${pct(B.win)}` : ""}.</p>`
+      : `<p class="lede"><b>Lineup is set.</b> No bench player projects for more than the starter he'd replace.</p>`;
+    const minor = T.issues.filter((i) => i.minor);
+    const slotRow = (s) => {
+      const issue = T.issues.find((i) => i.pid === s.pid && !i.minor);
+      const cls = s.pid == null || issue ? "bad" : sit.has(s.pid) ? "warnrow" : "";
+      return `<div class="lrow ${cls}">
+        <span class="slotl">${SLOT_LABEL[s.slot] || esc(s.slot)}</span>
+        <span class="lname">${s.pid ? wkName(s.pid, sit.has(s.pid) ? `<span class="chip out">Bench him</span>` : "") : `<b class="down">Empty slot</b>`}</span>
+        <span class="val">${s.pid ? wkPoints(s.pid) : ""}</span></div>`;
+    };
+    const bench = ((D.rosters || {})[rid] || []).filter((p) => p.slot === "bench" && wk().players?.[p.id])
+      .sort((a, b) => (wp(b.id).proj || 0) - (wp(a.id).proj || 0));
+    return `
+      ${lede}
+      ${minor.length ? `<p class="note">Game-time decisions: ${minor.map((i) => `${name(i.pid)} (${esc(i.why)})`).join(", ")}. Questionable players are projected at 80% of their usual output, doubtful at 20%.</p>` : ""}
+      <h2>Starters</h2>
+      <div class="group">${T.slots.map(slotRow).join("")}</div>
+      <h2>Bench<span class="count">${bench.length}</span></h2>
+      <div class="group">${bench.map((p) => `<div class="lrow ${start.has(p.id) ? "good" : ""}">
+        <span class="slotl">BN</span>
+        <span class="lname">${wkName(p.id, start.has(p.id) ? `<span class="chip start">Start him</span>` : "")}</span>
+        <span class="val">${wkPoints(p.id)}</span></div>`).join("") || `<div class="empty"><b>Empty bench</b></div>`}</div>`;
+  }
+  function weekMatchups(rid) {
+    const W = wk();
+    const side = (r) => {
+      const t = wt(r);
+      return `<div class="mside ${r === rid ? "me" : ""}">
+        <span class="who"><button class="linkish" type="button" data-wkteam="${r}">${teamHTML(r)}</button>
+          <small>${t.best.gain >= 0.5 ? `${f1(t.best.gain)} pts left on the bench` : "Lineup set"}${t.now > 0 ? `, ${f1(t.now)} scored` : ""}</small></span>
+        <b>${f1(t.mean)}</b><em class="${t.win >= 0.5 ? "up" : "muted"}">${pct(t.win)}</em></div>`;
+    };
+    return `
+      <div class="mlist">${(W.matchups || []).map(([a, b]) => `
+        <div class="mcard ${a === rid || b === rid ? "mine" : ""}">${side(a)}${side(b)}</div>`).join("")}</div>
+      <p class="note">Projected final score and win odds with the lineups set right now. Tap a team to check its lineup.</p>`;
+  }
+  function weekWaivers(rid) {
+    const W = wk();
+    const recs = (W.waivers || {})[rid] || [];
+    const drop = (W.drop || {})[rid];
+    const left = (W.faab_left || {})[rid];
+    const name = (p) => esc(wp(p).name || p);
+    const rivalText = (r) => r.rivals?.length
+      ? `Also wanted by ${r.rivals.map((x) => `${esc(teamOf(x.rid)?.team || "?")} (~$${fmt(x.worth)})`).join(", ")}`
+      : "No other team gains much";
+    const pos = POS_ORDER.filter((p) => (W.available || {})[p]?.length);
+    return `
+      ${board([
+        { v: W.budget ? `$${fmt(left)}` : "–", l: W.budget ? `FAAB left of $${fmt(W.budget)}` : "No FAAB budget", mark: true },
+        { v: W.bid_median != null ? `$${fmt(W.bid_median)}` : "–", l: `Typical winning bid (${plural(W.bid_count || 0, "claim")})` },
+        { v: drop?.open ? "Open" : "Full", l: drop?.open ? "Roster spot free" : "Roster, add means drop" },
+      ])}
+      ${drop && !drop.open ? `<p class="note">To make room, drop <b>${name(drop.pid)}</b>: losing him costs this team the least (${f1(drop.loss)} points of lineup and future value).</p>` : ""}
+      <h2>Best adds for this team</h2>
+      <div class="group">${recs.map((r) => `<div class="lrow wv">
+          <span class="lname">${wkName(r.pid)}
+            <span class="meta why"><span>+${f1(r.gain)} lineup pts this season</span><span>${f1(r.future)} value beyond</span></span>
+            <span class="meta"><span>${rivalText(r)}</span></span></span>
+          <span class="val">${r.bid != null ? `<b>$${fmt(r.bid)}</b><small>bid</small>` : `<b>${f1(r.net)}</b><small>pts</small>`}</span></div>`).join("")
+        || `<div class="empty"><b>Nobody worth a claim</b>No free agent beats what this roster already has. Check again after injuries.</div>`}</div>
+      <h2>Best available this week</h2>
+      <div class="cols">${pos.map((p) => `<div><h3 class="poshead"><span class="dot ${p}">${p}</span>${p === "DEF" ? "Defenses" : p === "K" ? "Kickers" : p}</h3>
+        <div class="group">${W.available[p].slice(0, 5).map((id) => `<div class="lrow"><span class="lname">${wkName(id)}</span>
+          <span class="val"><b>${f1(wp(id).proj)}</b><small>proj</small></span></div>`).join("")}</div></div>`).join("")}</div>
+      ${(W.bids || []).length ? `<h2>Biggest winning bids this season</h2>
+        <div class="group">${W.bids.map((b) => `<div class="lrow"><span class="lname">${wkName(b.pid)}<span class="meta"><span>${teamHTML(b.rid)}</span><span>week ${b.week}</span></span></span>
+          <span class="val"><b>$${fmt(b.amount)}</b></span></div>`).join("")}</div>` : ""}`;
+  }
+  function renderWeek() {
+    const W = wk();
+    if (!W.week) return `<div class="empty"><b>No games this week</b>Lineup checks, matchup odds and waiver picks show up here during the season.</div>`;
+    const rid = focusTeam();
+    const v = state.weekView;
+    const seg = [["lineup", "Lineup"], ["matchups", "Matchups"], ["waivers", "Waivers"]];
+    return `
+      ${teamPicker()}
+      <p class="note wk-head">${W.phase === "playoffs" ? "Playoffs, w" : "W"}eek ${W.week}. Projections updated ${ago(W.made)}.</p>
+      ${scoreboard(rid)}
+      <div class="controls" style="margin-top:14px"><div class="seg" role="group" aria-label="View">
+        ${seg.map(([k, l]) => `<button data-wv="${k}" class="${v === k ? "on" : ""}" aria-pressed="${v === k}">${l}</button>`).join("")}</div></div>
+      ${v === "matchups" ? weekMatchups(rid) : v === "waivers" ? weekWaivers(rid) : weekLineup(rid)}
+      ${how("How this week's numbers work", [
+        `Each player's projection is the model's rest-of-season points per game, nudged by his team's betting-line point total for this game against its usual total (a team expected to score 10% more gets about 5% more). Kickers and defenses use their points so far, adjusted the same way; a defense facing a low-scoring offense projects higher. Byes and players ruled out count zero.`,
+        `Tested on past seasons: the betting-line nudge cut weekly projection error slightly (7.28 to 7.26 points); the opponent's points allowed to the position added nothing, so it's left out. A single week is mostly noise: a 12-point projection lands anywhere from about 3 to 21.`,
+        `Win odds assume each player's score varies around his projection by the amount seen in past games. Points already scored count as final; games in progress count what's scored plus the unplayed share. Players whose games have started are locked, as on Sleeper.`,
+        `Waiver adds: the points a player would add to this team's best lineup in each remaining week (playoff weeks weighted by playoff odds), plus his model value beyond this season. The bid is a share of remaining FAAB that grows with that worth, kept just above what the most interested rival should pay. Injury news updates each morning; scores update every two hours on game days.`,
+      ])}`;
   }
 
   // ---------------------------------------------------------------- Values
@@ -1044,8 +1195,8 @@
   }
 
   // ---------------------------------------------------------------- router
-  const TABS = { league: renderLeague, team: renderTeam, values: renderValues, picks: renderPicks, plan: renderPlan, trade: renderTrade, trades: renderPastTrades, owners: renderOwners, activity: renderActivity, history: renderHistory };
-  const TITLES = { league: "League", team: "Team", values: "Values", picks: "Picks", plan: "Plan", trade: "Trade", trades: "Past trades", owners: "Managers", activity: "Moves", history: "History" };
+  const TABS = { league: renderLeague, week: renderWeek, team: renderTeam, values: renderValues, picks: renderPicks, plan: renderPlan, trade: renderTrade, trades: renderPastTrades, owners: renderOwners, activity: renderActivity, history: renderHistory };
+  const TITLES = { league: "League", week: "Week", team: "Team", values: "Values", picks: "Picks", plan: "Plan", trade: "Trade", trades: "Past trades", owners: "Managers", activity: "Moves", history: "History" };
   const FIRST_DIR = { rank: 1, team: 1, age: 1, champ: 1 };   // first tap: ascending for these, descending otherwise
   function route(keepScroll = false) {
     const y = window.scrollY;
@@ -1113,6 +1264,10 @@
     }
     const r = t.closest("[data-roster]");
     if (r) { setTeam(Number(r.dataset.roster)); }
+    const wkt = t.closest("[data-wkteam]");
+    if (wkt) { setTeam(Number(wkt.dataset.wkteam)); state.weekView = "lineup"; rerender(); window.scrollTo(0, 0); return; }
+    const wv = t.closest("[data-wv]");
+    if (wv) { state.weekView = wv.dataset.wv; store.set("weekView", state.weekView); rerender(); }
     const vp = t.closest("[data-vp]");
     if (vp) { state.valPos = vp.dataset.vp; state.valLimit = 100; rerender(); }
     if (t.closest("[data-more]")) { state.valLimit += 100; refreshValues(); }

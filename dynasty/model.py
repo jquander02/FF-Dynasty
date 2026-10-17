@@ -710,6 +710,8 @@ def build(store: Store, cfg: ModelConfig | None = None) -> dict:
         v["repl_ppg"] = round(repl.get(v["position"], 0.0), 2)
         v["model_value"] = round(sum(cfg.discounts[i] * x for i, x in enumerate(parts)), 1)
         v["model_value_now"] = round(cfg.discounts[0] * parts[0] + cfg.discounts[1] * parts[1], 1)
+        # value beyond this season (waiver bids weigh it against this season's lineup gain)
+        v["value_future"] = round(sum(cfg.discounts[i] * x for i, x in enumerate(parts) if i > 0), 1)
 
     store.write_frame("player_projection", list(proj.values()))
     store.commit()
