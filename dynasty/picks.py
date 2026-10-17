@@ -29,6 +29,7 @@ import math
 import random
 import re
 import statistics
+import time
 from collections import defaultdict
 
 from .store import Store
@@ -436,6 +437,12 @@ def build(store: Store, weights: dict | None = None) -> dict:
             "slot_odds": json.dumps([round(x, 3) for x in dist[1:]]),
         })
     store.write_frame("pick_value", rows)
+    # daily history, so a trade can be judged at the values of its day (owners.trade_log)
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    store.write_frame("pick_value_history", [
+        {"snapshot_date": today, "season": r["season"], "round": r["round"],
+         "original_roster_id": r["original_roster_id"], "value": r["value"]} for r in rows
+    ], replace_where=("snapshot_date=?", (today,)))
 
     # pick capital on team_window
     cap = defaultdict(float)

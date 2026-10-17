@@ -17,6 +17,7 @@ Writes owner_profile, trade_review.
 from __future__ import annotations
 
 import json
+import time
 from collections import Counter, defaultdict
 
 from .store import Store
@@ -62,7 +63,7 @@ def _pick_player_map(store: Store, val: dict | None = None) -> dict:
             near = [v for k, v in by_no.items() if abs(k - p["pick_no"]) <= SLOT_WINDOW]
             out[(str(d["season"]), p["round"], orig)] = {
                 "player_id": p["player_id"], "pick": f"{p['round']}.{in_round:02d}", "pick_no": p["pick_no"],
-                "by_roster": p["roster_id"], "league_id": d["league_id"],
+                "by_roster": p["roster_id"], "league_id": d["league_id"], "drafted_ms": d["start_time"],
                 "slot_value": sum(near) / len(near) if near else 0.0}
     return out
 
@@ -72,14 +73,81 @@ def _package(values: list[float]) -> float:
     return package_value(values)
 
 
-def trade_log(store: Store) -> list[dict]:
-    """Every completed trade in this league's history, newest first, valued at today's values.
+PLAYOFF_WEIGHT = 2.0   # a start in the winners' bracket counts double
+REPL_DEFAULT = {"QB": 15.8, "RB": 8.3, "WR": 8.4, "TE": 8.1}
+DAY_LOOKBACK = 3       # days back to find the value snapshot for "on the day"
 
-    Each side lists what it received. Players carry today's value and where they are now. Picks
-    from completed drafts carry the player taken with them (and that player's value now); future
-    picks carry their projected slot and pick value. Sides are scored with the trade lab's
-    package rule, (sum of v^1.3)^(1/1.3), and a trade is even when every side's net is within 10%
-    of the bigger package."""
+
+def _day(ms) -> str | None:
+    if not ms:
+        return None
+    return time.strftime("%Y-%m-%d", time.gmtime(ms / 1000))
+
+
+def _days(a: str, b: str) -> float:
+    """Days from date a to date b (YYYY-MM-DD)."""
+    f = lambda x: time.mktime(time.strptime(x, "%Y-%m-%d"))  # noqa: E731
+    return (f(b) - f(a)) / 86400
+
+
+class _History:
+    """Daily value snapshots (players and picks) for 'value on a date' lookups."""
+
+    def __init__(self, store: Store):
+        self.players = defaultdict(dict)
+        for r in store.query("SELECT snapshot_date d, player_id, value FROM player_value"):
+            self.players[r["d"]][r["player_id"]] = r["value"] or 0.0
+        self.picks = defaultdict(dict)
+        if store.query("SELECT 1 FROM sqlite_master WHERE name='pick_value_history'"):
+            for r in store.query("SELECT snapshot_date d, season, round, original_roster_id o, value "
+                                 "FROM pick_value_history"):
+                self.picks[r["d"]][(str(r["season"]), r["round"], r["o"])] = r["value"] or 0.0
+        self.dates = sorted(self.players)
+
+    def after(self, day: str | None) -> str | None:
+        """First snapshot on or after a day, within DAY_LOOKBACK days (value when a player left)."""
+        if not day:
+            return None
+        d = next((d for d in self.dates if d >= day), None)
+        return d if d and _days(day, d) <= DAY_LOOKBACK else None
+
+    def on(self, day: str | None) -> str | None:
+        """Snapshot in force on a day: the latest on or before it, within DAY_LOOKBACK days."""
+        if not day:
+            return None
+        best = None
+        for d in self.dates:
+            if d <= day:
+                best = d
+        return best if best and _days(best, day) <= DAY_LOOKBACK else None
+
+
+def value_per_point(store: Store) -> float:
+    """Value units per point above replacement, from today's values against the model's
+    discounted points-above-replacement (model_raw): sum of values / sum of points."""
+    vd = store.query("SELECT MAX(snapshot_date) d FROM player_value")[0]["d"]
+    cols = {r["name"] for r in store.query("PRAGMA table_info(player_value)")}
+    if not vd or "model_raw" not in cols:
+        return 10.0
+    r = store.query("SELECT SUM(value) v, SUM(model_raw) m FROM player_value WHERE snapshot_date=? AND model_raw>0",
+                    (vd,))[0]
+    return (r["v"] / r["m"]) if r["m"] else 10.0
+
+
+def trade_log(store: Store) -> list[dict]:
+    """Every completed trade in this league's history, newest first.
+
+    Each side lists what it received; each asset counts as banked value + remaining value:
+      banked     points the asset scored in that team's starting lineup after the trade, above a
+                 replacement starter at his position (playoff starts count double), converted to
+                 value at the model's value-per-point rate. Stays with the team for good.
+      remaining  today's value while he's still on that team; once traded or dropped, his value
+                 on the day he left (from the daily value history; today's value before it began).
+    Used picks carry the player taken (banked from draft day). A pick traded on before the draft
+    counts at its slot's worth. Future picks carry their pick value.
+    Sides are scored with the trade lab's package rule, (sum of v^1.3)^(1/1.3); a trade is even
+    when every side's net is within 10% of the bigger package. Where value snapshots exist for the
+    trade's day, the trade is also judged at that day's values ('day' fields)."""
     lg = store.query("SELECT * FROM league_season WHERE is_current=1")[0]
     cur = lg["league_id"]
     leagues = {r["league_id"]: r["season"] for r in store.query("SELECT league_id, season FROM league_season")}
@@ -107,6 +175,68 @@ def trade_log(store: Store) -> list[dict]:
         return {"id": pid, "name": i["full_name"] if i else f"Player {pid}", "pos": i["position"] if i else None,
                 "nfl": i["team"] if i else None, "value": round(val.get(pid, 0.0)), "now_on": now_on.get(pid)}
 
+    # ---- banked value: starts by a roster, above replacement, playoff starts doubled
+    hist = _History(store)
+    k = value_per_point(store)
+    repl = dict(REPL_DEFAULT)
+    if store.query("SELECT 1 FROM sqlite_master WHERE name='player_projection'"):
+        pc = {r["name"] for r in store.query("PRAGMA table_info(player_projection)")}
+        if "repl_ppg" in pc:
+            for r in store.query("SELECT position, MAX(repl_ppg) r FROM player_projection GROUP BY position"):
+                if r["position"] in repl and r["r"]:
+                    repl[r["position"]] = r["r"]
+    season_n = {lid: int(sv) for lid, sv in leagues.items()}
+    po_start = {r["league_id"]: r["playoff_week_start"] or 15
+                for r in store.query("SELECT league_id, playoff_week_start FROM league_season")}
+    winners = defaultdict(set)
+    for r in store.query("SELECT league_id, t1, t2 FROM bracket WHERE bracket='winners'"):
+        winners[r["league_id"]] |= {r["t1"], r["t2"]}
+    starts = defaultdict(list)    # (roster, player) -> [(season, week, points, weight)]
+    for r in store.query("SELECT league_id, week, roster_id, player_id, points FROM matchup_player WHERE is_starter=1"):
+        if r["league_id"] not in season_n:
+            continue
+        w = PLAYOFF_WEIGHT if (r["week"] >= po_start.get(r["league_id"], 15)
+                               and r["roster_id"] in winners[r["league_id"]]) else 1.0
+        starts[(r["roster_id"], r["player_id"])].append((season_n[r["league_id"]], r["week"], r["points"] or 0.0, w))
+    # when each player left each roster: dropped by it, or sent away in a trade
+    exits = defaultdict(list)     # (roster, player) -> [(ms, (season, week), how)]
+    for r in store.query(
+        """SELECT m.kind, m.roster_id, m.from_roster_id, m.player_id, t.league_id, t.week,
+                  COALESCE(t.status_updated, t.created) ts, t.type
+           FROM txn_move m JOIN txn t ON t.transaction_id=m.transaction_id
+           WHERE t.status='complete' AND m.player_id IS NOT NULL AND m.kind IN ('add','drop')"""):
+        if r["league_id"] not in season_n:
+            continue
+        sw = (season_n[r["league_id"]], r["week"] or 0)
+        if r["kind"] == "drop":
+            exits[(r["roster_id"], r["player_id"])].append((r["ts"] or 0, sw, "dropped"))
+        elif r["from_roster_id"] is not None:
+            exits[(r["from_roster_id"], r["player_id"])].append((r["ts"] or 0, sw, "traded"))
+
+    def hold(rid, pid, since_ms, since_sw):
+        """Banked + remaining value of a player a roster acquired at since_ms / since_sw."""
+        pos = (info.get(pid) or {})["position"] if info.get(pid) else None
+        out_ = next((e for e in sorted(exits.get((rid, pid), [])) if e[0] > since_ms), None)
+        end_sw = out_[1] if out_ else (9999, 99)
+        par = n = 0
+        if pos in repl:
+            for se, wk, pts, wgt in starts.get((rid, pid), []):
+                if since_sw <= (se, wk) <= end_sw:
+                    par += wgt * (pts - repl[pos])
+                    n += 1
+        banked = k * max(0.0, par)
+        res = {"banked": round(banked), "banked_pts": round(max(0.0, par), 1), "starts": n}
+        if out_:
+            day = _day(out_[0])
+            snap = hist.after(day)
+            remain = hist.players[snap].get(pid, 0.0) if snap else val.get(pid, 0.0)
+            res["left"] = {"date": day, "how": out_[2], "valued": "then" if snap else "today"}
+        else:
+            remain = val.get(pid, 0.0)
+        res["remain"] = round(remain)
+        res["value"] = round(banked + remain)
+        return res
+
     def team_of(lid, rid):
         uid = owner_of.get((lid, rid))
         return uid, cur_rid.get(uid), names.get(uid, {})
@@ -127,12 +257,19 @@ def trade_log(store: Store) -> list[dict]:
             uid, crid, nm = team_of(lid, rid)
             sides.append({"roster_id": crid, "user_id": uid, "team": nm.get("team") or f"Team {rid}",
                           "owner": nm.get("owner"), "left_league": crid is None, "got": []})
+        t_ms = t["status_updated"] or t["created"] or 0
+        t_sw = (season_n.get(lid, 0), t["week"] or 0)
+        t_day = _day(t_ms)
+        snap_day = hist.on(t_day)
         for m in moves:
             if m["kind"] == "drop" or m["roster_id"] not in idx:
                 continue
             frm = idx.get(m["from_roster_id"])
             if m["kind"] == "add":
                 a = {"k": "player", "from": frm, **player(m["player_id"])}
+                a.update(hold(m["roster_id"], m["player_id"], t_ms, t_sw))
+                if snap_day:
+                    a["day"] = round(hist.players[snap_day].get(m["player_id"], 0.0))
             elif m["kind"] == "pick":
                 season, rnd, orig = str(m["pick_season"]), m["pick_round"], m["pick_original_roster"]
                 _, orig_cur, orig_nm = team_of(lid, orig)
@@ -149,11 +286,17 @@ def trade_log(store: Store) -> list[dict]:
                              value=round(hit["slot_value"]))
                 elif hit:
                     b = player(hit["player_id"])
-                    a.update(status="used", pick=hit["pick"], became=b, value=b["value"])
+                    h = hold(m["roster_id"], hit["player_id"], hit.get("drafted_ms") or t_ms,
+                             (season_n.get(hit["league_id"], int(season)), 0))
+                    a.update(status="used", pick=hit["pick"], became=b, **h)
                 elif fut:
                     a.update(status="future", exp_slot=fut["exp_slot"], value=round(fut["value"] or 0))
                 else:
                     a.update(status="unknown", value=0)
+                if snap_day:
+                    key = (season, rnd, orig_cur if orig_cur is not None else orig)
+                    if key in hist.picks.get(snap_day, {}):
+                        a["day"] = round(hist.picks[snap_day][key])
             elif m["kind"] == "faab":
                 a = {"k": "faab", "from": frm, "amount": m["amount"], "value": 0}
             else:
@@ -166,15 +309,31 @@ def trade_log(store: Store) -> list[dict]:
             sd["got_raw"] = round(sum(got))
             sd["gave_value"] = round(_package(gave))
             sd["net"] = sd["got_value"] - sd["gave_value"]
+        for sd in sides:
+            sd["banked"] = sum(a.get("banked", 0) for a in sd["got"])
         big = max([sd["got_value"] for sd in sides] + [1])
         even = all(abs(sd["net"]) <= 0.10 * big for sd in sides)
         best = max(range(len(sides)), key=lambda i: sides[i]["net"]) if sides else None
-        out.append({
+        rec = {
             "id": t["transaction_id"], "season": leagues.get(lid), "week": t["week"],
             "ts": t["status_updated"] or t["created"], "sides": sides,
             "even": even, "winner": None if even or best is None else best,
             "margin": 0 if best is None else sides[best]["net"],
-        })
+        }
+        # on the day: every asset needs a value from that day's snapshot
+        assets = [a for sd in sides for a in sd["got"] if a["k"] != "faab"]
+        if snap_day and assets and all("day" in a for a in assets):
+            for i, sd in enumerate(sides):
+                sd["day_got"] = round(_package([a["day"] for a in sd["got"] if a["k"] != "faab"]))
+                sd["day_gave"] = round(_package([a["day"] for o in sides for a in o["got"]
+                                                 if a.get("from") == i and a["k"] != "faab"]))
+                sd["day_net"] = sd["day_got"] - sd["day_gave"]
+            dbig = max([sd["day_got"] for sd in sides] + [1])
+            deven = all(abs(sd["day_net"]) <= 0.10 * dbig for sd in sides)
+            dbest = max(range(len(sides)), key=lambda i: sides[i]["day_net"])
+            rec.update(day={"date": snap_day, "even": deven, "winner": None if deven else dbest,
+                            "margin": sides[dbest]["day_net"]})
+        out.append(rec)
     return out
 
 
@@ -464,5 +623,5 @@ def build(store: Store) -> dict:
     if reviews:
         store.write_frame("trade_review", reviews)
     store.commit()
-    return {"profiles": len(rows), "trades_reviewed": len(reviews),
+    return {"profiles": len(rows), "trades_reviewed": len(reviews), "value_per_point": round(value_per_point(store), 2),
             "league_draft_mix": {k: round(v, 2) for k, v in base_share.items()}}

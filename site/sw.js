@@ -1,5 +1,5 @@
 // Offline support: the app shell is cached; data is network-first, falling back to the last copy.
-const SHELL = "dynasty-shell-v10";
+const SHELL = "dynasty-shell-v11";
 const DATA = "dynasty-data-v2";
 const SHELL_FILES = ["./", "index.html", "styles.css", "app.js", "manifest.webmanifest",
   "fonts/BigShouldersDisplay.woff", "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
@@ -36,8 +36,9 @@ self.addEventListener("fetch", (e) => {
     );
     return;
   }
+  // revalidate with the server so new app code arrives together with new data
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request, { cache: "no-cache" })
       .then((res) => {
         if (res.ok) {
           const copy = res.clone();

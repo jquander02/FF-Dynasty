@@ -198,5 +198,54 @@ class Phase4PipelineTest(Phase3PipelineTest):
         self.assertIsNotNone(cmc["p2"])
 
 
+    def test_banked_value_and_day_of(self):
+        """Jefferson goes to my roster in week 3 (t-trade-1). His starts for me after the trade bank
+        value (playoff starts double); after I drop him, his value is frozen at the day he left."""
+        lid = self.q("SELECT league_id FROM league_season WHERE is_current=1")[0]["league_id"]
+        self.store.conn.execute("UPDATE league_season SET playoff_week_start=15 WHERE league_id=?", (lid,))
+        self.store.conn.execute("DELETE FROM matchup_player WHERE player_id='6794'")
+        rows = [(7, 2, 40.0), (MY_ROSTER, 3, 30.0), (MY_ROSTER, 4, 20.0), (MY_ROSTER, 15, 25.0), (MY_ROSTER, 16, 50.0)]
+        self.store.upsert("matchup_player", [{"league_id": lid, "week": w, "roster_id": r, "player_id": "6794",
+                                              "points": p, "is_starter": 1} for r, w, p in rows])
+        self.store.upsert("bracket", [{"league_id": lid, "bracket": "winners", "round": 1, "matchup": 1,
+                                       "t1": MY_ROSTER, "t2": 7}])
+        # dropped in week 16, after that week's games: the week 16 start still counts, nothing later
+        self.store.upsert("txn", [{"transaction_id": "t-drop", "league_id": lid, "season": "2026", "week": 16,
+                                   "type": "free_agent", "status": "complete", "created": 1795000000000,
+                                   "status_updated": 1795000000000}])
+        self.store.upsert("txn_move", [{"transaction_id": "t-drop", "seq": 0, "kind": "drop",
+                                        "roster_id": MY_ROSTER, "player_id": "6794"}])
+        self.store.upsert("matchup_player", [{"league_id": lid, "week": 17, "roster_id": MY_ROSTER,
+                                              "player_id": "6794", "points": 99.0, "is_starter": 1}])
+        # value snapshots on the trade's day (2026-09-21)
+        self.store.upsert("player_value", [{"snapshot_date": "2026-09-21", "player_id": "6794", "value": 9000},
+                                           {"snapshot_date": "2026-09-21", "player_id": "7001", "value": 3000}])
+        self.store.write_frame("pick_value_history", [{"snapshot_date": "2026-09-21", "season": "2027", "round": 1,
+                                                       "original_roster_id": MY_ROSTER, "value": 2500}],
+                               replace_where=("1=1", ()))
+        self.store.commit()
+        tr = [t for t in owners.trade_log(self.store) if t["id"] == "t-trade-1"][0]
+        mine = [s for s in tr["sides"] if s["roster_id"] == MY_ROSTER][0]
+        jj = [a for a in mine["got"] if a["k"] == "player"][0]
+        wr = owners.REPL_DEFAULT["WR"]
+        proj = self.q("SELECT MAX(repl_ppg) r FROM player_projection WHERE position='WR'")
+        if proj and proj[0]["r"]:
+            wr = proj[0]["r"]
+        expect = (30 - wr) + (20 - wr) + 2 * (25 - wr) + 2 * (50 - wr)
+        self.assertEqual(jj["starts"], 4)                      # not roster 7's week 2, not week 17
+        self.assertAlmostEqual(jj["banked_pts"], round(expect, 1), places=1)
+        k = owners.value_per_point(self.store)
+        self.assertEqual(jj["banked"], round(k * expect))
+        self.assertEqual(jj["left"]["how"], "dropped")
+        self.assertEqual(jj["value"], jj["banked"] + jj["remain"])
+        self.assertEqual(mine["banked"], jj["banked"])
+        # on the day: 9000 for Jefferson vs 3000 + the 2027 1st (2500)
+        self.assertEqual(jj["day"], 9000)
+        self.assertEqual(tr["day"]["date"], "2026-09-21")
+        self.assertEqual(mine["day_got"], 9000)
+        self.assertGreater(mine["day_net"], 0)
+        self.assertEqual(tr["day"]["winner"], [s["roster_id"] for s in tr["sides"]].index(MY_ROSTER))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -40,7 +40,12 @@ that column (tap again to reverse); player and pick lists have a "Sort by" menu.
   totals in view.
 - **Past trades:** every trade in the league's history, for all teams or one team (optionally
   only those with a given partner). Each side shows what it got, valued today and where each
-  player is now. A pick the team used shows the player it took ("2026 round 1, 1.03, became
+  player is now. Each player counts as banked value (his points in that team's starting lineup
+  since the trade, above a replacement starter at his position, playoff starts double, converted
+  at the model's value-per-point rate) plus what's left (today's value while he's on the team, or
+  his value on the day he was traded or dropped; a retired player keeps what he banked). Trades
+  made since daily values began (October 2026) also get an "on the day" verdict at that day's
+  values. A pick the team used shows the player it took ("2026 round 1, 1.03, became
   ..."); a pick the team traded on before the draft counts at what that slot was worth (today's
   average value of the players taken within three picks of it), since another team chose the
   player; future picks show their projected slot. Each trade gets a verdict (won, lost or even

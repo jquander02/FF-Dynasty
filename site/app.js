@@ -977,7 +977,7 @@
       <h2>All managers<span class="count">${O.profiles.length}</span></h2>
       ${sortableTable("owners", cols, O.profiles, { key: "trades", dir: -1 }, (x) => (x.roster_id === p.roster_id ? "me" : ""))}
       ${how("How the scouting reports work", [
-        `Built from every trade, waiver claim and draft in this league's history. Trade results use today's values, with used draft picks counted as the player taken (or, for picks flipped before the draft, the slot's worth); a trade is even within 10%. "Pieces per deal" and "player age" compare what they get with what they give.`,
+        `Built from every trade, waiver claim and draft in this league's history. Trade results count each player's banked value (his starts for the team since the trade) plus what's left of his value, with used draft picks counted as the player taken (or, for picks flipped before the draft, the slot's worth); a trade is even within 10%. "Pieces per deal" and "player age" compare what they get with what they give.`,
         `Needs and players they'd move come from their team plan (the Plan tab): weak spots are starting slots below the league's median starter. Lineups is points scored as a share of the best lineup they could have started. Advice is generated from all of this; treat it as a starting point.`,
       ])}`;
   }
@@ -996,6 +996,20 @@
     if (rid === receiver && receiver != null) return "still on the roster";
     return `now on ${teamHTML(rid)}`;
   }
+  // "1,240 banked from 18 starts + 2,100 value now" (or the value when he left the team)
+  function heldLine(a) {
+    if (a.banked == null && !a.left) return "";
+    const parts = [];
+    if (a.banked > 0) parts.push(`${fmt(a.banked)} banked from ${plural(a.starts, "start")}`);
+    else if (a.starts) parts.push(`${plural(a.starts, "start")}, none above a replacement starter`);
+    if (a.left) {
+      const d = new Date(`${a.left.date}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+      parts.push(`${fmt(a.remain)} ${a.left.valued === "then" ? "value" : "value today"} when ${a.left.how} ${d}`);
+    } else if (a.banked > 0) {
+      parts.push(`${fmt(a.remain)} value now`);
+    }
+    return parts.length ? `<span class="became muted held">${parts.join(" + ")}</span>` : "";
+  }
   function pastAsset(a, receiver) {
     const clickable = (id) => (byId[id] ? `data-player="${esc(id)}"` : "");
     if (a.k === "faab") {
@@ -1005,7 +1019,7 @@
       const tag = byId[a.id] ? "button" : "div";
       return `<${tag} class="past-row" ${tag === "button" ? `type="button" ${clickable(a.id)}` : ""}>
         <span class="dot ${esc(a.pos || "")}">${esc(a.pos || "?")}</span>
-        <span><span class="aname">${esc(a.name)}</span><span class="meta"><span>${whereNow(a.now_on, receiver)}</span></span></span>
+        <span><span class="aname">${esc(a.name)}</span><span class="meta"><span>${whereNow(a.now_on, receiver)}</span></span>${heldLine(a)}</span>
         <span class="aval">${fmt(a.value)}</span></${tag}>`;
     }
     const owner = a.orig_team ? `${esc(a.orig_team)}${/s$/i.test(a.orig_team) ? "'" : "'s"}` : "";
@@ -1025,28 +1039,42 @@
       return `<${tag} class="past-row pick" ${tag === "button" ? `type="button" ${clickable(b.id)}` : ""}>
         <span class="dot PK">PK</span>
         <span><span class="aname">${head}</span><span class="meta"><span>${owner} pick</span></span>
-          <span class="became">Became <b>${esc(b.name || "?")}</b>${b.pos ? ` <span class="dot ${esc(b.pos)}">${esc(b.pos)}</span>` : ""} <span class="muted">${whereNow(b.now_on, receiver)}</span></span></span>
+          <span class="became">Became <b>${esc(b.name || "?")}</b>${b.pos ? ` <span class="dot ${esc(b.pos)}">${esc(b.pos)}</span>` : ""} <span class="muted">${whereNow(b.now_on, receiver)}</span></span>${heldLine(a)}</span>
         <span class="aval">${fmt(a.value)}</span></${tag}>`;
+    }
+    if (a.became) {   // any other drafted-pick status: still show who was taken and the value counted
+      const b = a.became;
+      return `<div class="past-row pick"><span class="dot PK">PK</span>
+        <span><span class="aname">${head}</span><span class="meta"><span>${owner} pick</span></span>
+          <span class="became">Became <b>${esc(b.name || "?")}</b></span></span>
+        <span class="aval">${fmt(a.value)}</span></div>`;
     }
     const meta = a.status === "future"
       ? `${owner} pick, not drafted yet${a.exp_slot ? `, projected ${slotLabel(a.round, a.exp_slot)}` : ""}`
       : `${owner} pick, player taken not found`;
     return `<div class="past-row pick"><span class="dot PK">PK</span>
       <span><span class="aname">${head}</span><span class="meta"><span>${meta}</span></span></span>
-      <span class="aval">${a.status === "future" ? fmt(a.value) : "–"}</span></div>`;
+      <span class="aval">${a.status === "future" || a.value ? fmt(a.value) : "–"}</span></div>`;
   }
   function tradeCard(tr, focus) {
     const fi = focus != null ? sideOf(tr, focus) : -1;
     const order = tr.sides.map((_, i) => i).sort((a, b) => (b === fi) - (a === fi));
-    let verdict;
+    let verdict, dayV = "";
+    const D_ = tr.day;
     if (fi >= 0) {
       const o = outcome(tr, fi), m = tr.sides[fi].net;
       verdict = o === 0 ? `<span class="verdict-chip even">Even</span>`
         : `<span class="verdict-chip ${o > 0 ? "won" : "lost"}">${o > 0 ? "Won" : "Lost"} by ${fmt(Math.abs(m))}</span>`;
+      if (D_) {
+        const dn = tr.sides[fi].day_net;
+        dayV = D_.even ? "Fair on the day" : `${dn > 0 ? "Won" : "Lost"} by ${fmt(Math.abs(dn))} on the day`;
+      }
     } else {
       verdict = tr.even ? `<span class="verdict-chip even">Even</span>`
         : `<span class="verdict-chip won">${esc(tr.sides[tr.winner]?.team || "")} won by ${fmt(tr.margin)}</span>`;
+      if (D_) dayV = D_.even ? "Fair on the day" : `${esc(tr.sides[D_.winner]?.team || "")} won by ${fmt(D_.margin)} on the day`;
     }
+    if (dayV) verdict = `<span class="verdicts">${verdict}<span class="dayv">${dayV}</span></span>`;
     return `
       <article class="tcard">
         <header><span><b>${tr.season}${tr.week ? `, week ${tr.week}` : ""}</b> <span class="muted">${tradeDate(tr)}</span></span>${verdict}</header>
@@ -1056,7 +1084,7 @@
             return `<section class="tside ${i === fi ? "focus" : ""}">
               <h3>${sideName(sd)} <span class="muted">got</span></h3>
               ${sd.got.map((a) => pastAsset(a, sd.roster_id)).join("") || `<p class="note">Nothing</p>`}
-              <div class="tsum"><span>Worth ${fmt(sd.got_value)} today${sd.got.filter((a) => a.k !== "faab").length > 1 ? ` <span class="muted">(${fmt(sd.got_raw)} before the package discount)</span>` : ""}</span>
+              <div class="tsum"><span>Worth ${fmt(sd.got_value)}${sd.banked > 0 ? `, ${fmt(sd.banked)} of it banked` : " today"}${sd.got.filter((a) => a.k !== "faab").length > 1 ? ` <span class="muted">(${fmt(sd.got_raw)} before the package discount)</span>` : ""}${sd.day_got != null ? `<br><span class="muted">On the day: ${fmt(sd.day_got)} got, ${fmt(sd.day_gave)} given</span>` : ""}</span>
                 <b class="${signCls(sd.net)}">${signed(sd.net)}</b></div>
             </section>`;
           }).join("")}
@@ -1093,7 +1121,7 @@
       summary = board([
         { v: list.length, l: plural(list.length, "trade").replace(/^\d+ /, "") + (wid != null ? ` with ${esc(teamOf(wid)?.team || "")}` : ""), mark: true },
         { v: `${res.filter((x) => x > 0).length}–${res.filter((x) => x < 0).length}–${res.filter((x) => x === 0).length}`, cls: "long", l: "Won, lost, even" },
-        { v: `${total > 0 ? "+" : total < 0 ? "−" : ""}${Math.abs(total) >= 1000 ? `${(Math.abs(total) / 1000).toFixed(1)}k` : fmt(Math.abs(total))}`, cls: `${signCls(total)} long`, l: "Net value today" },
+        { v: `${total > 0 ? "+" : total < 0 ? "−" : ""}${Math.abs(total) >= 1000 ? `${(Math.abs(total) / 1000).toFixed(1)}k` : fmt(Math.abs(total))}`, cls: `${signCls(total)} long`, l: "Net value, banked + left" },
         { v: `${picksIn}/${picksOut}`, l: "Picks got, picks given" },
       ]);
     } else {
@@ -1114,7 +1142,9 @@
       ${summary}
       <div class="tlist">${list.map((tr) => tradeCard(tr, tid)).join("") || `<div class="empty"><b>No trades</b>${tid != null ? "This team hasn't made a trade" : "No trades yet"}${wid != null ? " with that team" : ""}.</div>`}</div>
       ${how("How past trades are judged", [
-        `Everything is valued at today's values, not what it was worth on the day. Players count at their current value wherever they are now. A draft pick a team used counts as the player it took. A pick a team traded on before the draft counts at what that slot turned out to be worth (the average value today of the players taken within three picks of it), since another team chose the player. A pick not yet used counts at its pick value and projected slot.`,
+        `Each player counts as what he has already given the team plus what's left. Banked: his points in that team's starting lineup since the trade, above a replacement starter at his position (playoff starts count double), turned into value at the same rate the model uses. What's left: his value today while he's still on the team, or his value on the day he was traded or dropped (values have been saved daily since October 2026; for earlier moves it's today's value). A player who retires keeps everything he banked.`,
+        `On the day: trades made since daily values began are also judged at the values of the day they were made, which tells you whether the deal was fair when it was struck. The main verdict tells you how it has turned out.`,
+        `A draft pick a team used counts as the player it took, with his starts banked from draft day. A pick a team traded on before the draft counts at what that slot turned out to be worth (the average value today of the players taken within three picks of it), since another team chose the player. A pick not yet used counts at its pick value and projected slot.`,
         `Each side's haul is combined the same way as in the trade lab: two equal pieces count as about 1.7 of one, because only so many players start. The number on each side is what it got minus what it gave. A trade is even when every side is within 10%.`,
         `FAAB moved in a trade is shown but not valued. Tap a player to see his value breakdown.`,
       ])}`;
