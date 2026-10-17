@@ -977,7 +977,7 @@
       <h2>All managers<span class="count">${O.profiles.length}</span></h2>
       ${sortableTable("owners", cols, O.profiles, { key: "trades", dir: -1 }, (x) => (x.roster_id === p.roster_id ? "me" : ""))}
       ${how("How the scouting reports work", [
-        `Built from every trade, waiver claim and draft in this league's history. Trade results use today's values, with used draft picks counted as the player taken; a trade is even within 10%. "Pieces per deal" and "player age" compare what they get with what they give.`,
+        `Built from every trade, waiver claim and draft in this league's history. Trade results use today's values, with used draft picks counted as the player taken (or, for picks flipped before the draft, the slot's worth); a trade is even within 10%. "Pieces per deal" and "player age" compare what they get with what they give.`,
         `Needs and players they'd move come from their team plan (the Plan tab): weak spots are starting slots below the league's median starter. Lineups is points scored as a share of the best lineup they could have started. Advice is generated from all of this; treat it as a starting point.`,
       ])}`;
   }
@@ -1009,7 +1009,16 @@
         <span class="aval">${fmt(a.value)}</span></${tag}>`;
     }
     const owner = a.orig_team ? `${esc(a.orig_team)}${/s$/i.test(a.orig_team) ? "'" : "'s"}` : "";
-    const head = `${a.season} round ${a.round}${a.status === "used" ? ` <span class="slotno">${esc(a.pick)}</span>` : ""}`;
+    const head = `${a.season} round ${a.round}${a.pick ? ` <span class="slotno">${esc(a.pick)}</span>` : ""}`;
+    if (a.status === "flipped") {
+      const b = a.became || {};
+      const by = a.drafted_by != null ? teamHTML(a.drafted_by) : esc(a.drafted_by_team || "another team");
+      return `<div class="past-row pick">
+        <span class="dot PK">PK</span>
+        <span><span class="aname">${head}</span><span class="meta"><span>${owner} pick, traded on before the draft</span></span>
+          <span class="became muted">${by} took ${esc(b.name || "?")} with it. Counted at what picks near ${esc(a.pick)} are worth.</span></span>
+        <span class="aval">${fmt(a.value)}</span></div>`;
+    }
     if (a.status === "used") {
       const b = a.became || {};
       const tag = byId[b.id] ? "button" : "div";
@@ -1089,7 +1098,7 @@
       ]);
     } else {
       const evenN = list.filter((tr) => tr.even).length;
-      const usedPicks = list.reduce((x, tr) => x + tr.sides.reduce((y, sd) => y + sd.got.filter((a) => a.k === "pick" && a.status === "used").length, 0), 0);
+      const usedPicks = list.reduce((x, tr) => x + tr.sides.reduce((y, sd) => y + sd.got.filter((a) => a.k === "pick" && (a.status === "used" || a.status === "flipped")).length, 0), 0);
       summary = board([
         { v: list.length, l: "Trades in league history" },
         { v: pct(list.length ? evenN / list.length : null), l: "Even at today's values" },
@@ -1105,7 +1114,7 @@
       ${summary}
       <div class="tlist">${list.map((tr) => tradeCard(tr, tid)).join("") || `<div class="empty"><b>No trades</b>${tid != null ? "This team hasn't made a trade" : "No trades yet"}${wid != null ? " with that team" : ""}.</div>`}</div>
       ${how("How past trades are judged", [
-        `Everything is valued at today's values, not what it was worth on the day. Players count at their current value wherever they are now. A draft pick that has been used counts as the player taken with it; a pick not yet used counts at its pick value and projected slot.`,
+        `Everything is valued at today's values, not what it was worth on the day. Players count at their current value wherever they are now. A draft pick a team used counts as the player it took. A pick a team traded on before the draft counts at what that slot turned out to be worth (the average value today of the players taken within three picks of it), since another team chose the player. A pick not yet used counts at its pick value and projected slot.`,
         `Each side's haul is combined the same way as in the trade lab: two equal pieces count as about 1.7 of one, because only so many players start. The number on each side is what it got minus what it gave. A trade is even when every side is within 10%.`,
         `FAAB moved in a trade is shown but not valued. Tap a player to see his value breakdown.`,
       ])}`;

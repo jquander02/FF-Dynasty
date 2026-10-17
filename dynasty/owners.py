@@ -24,11 +24,19 @@ from .store import Store
 SKILL = ("QB", "RB", "WR", "TE")
 
 
-def _pick_player_map(store: Store) -> dict:
-    """(season, round, original roster) of a used pick -> {player_id, pick} for every completed draft.
+SLOT_WINDOW = 3  # picks either side used to value a draft slot
+
+
+def _pick_player_map(store: Store, val: dict | None = None) -> dict:
+    """(season, round, original roster) of a used pick -> {player_id, pick, by_roster, league_id,
+    slot_value} for every completed draft.
 
     The original roster comes from the draft's slot_to_roster_id, or from draft_order (user -> slot)
-    when Sleeper leaves that out. Rookie drafts win over startup drafts for the same key."""
+    when Sleeper leaves that out. Rookie drafts win over startup drafts for the same key.
+    by_roster is the roster that made the pick. slot_value is what that draft slot turned out to be
+    worth: today's average value of the players taken within SLOT_WINDOW picks of it in that draft,
+    for teams that traded the pick on before the draft (the player taken wasn't their choice)."""
+    val = val or {}
     owner_of = {(r["league_id"], r["owner_id"]): r["roster_id"]
                 for r in store.query("SELECT league_id, roster_id, owner_id FROM roster")}
     out = {}
@@ -43,14 +51,19 @@ def _pick_player_map(store: Store) -> dict:
         if not s2r:
             continue
         n = len(s2r)
-        for p in store.query("SELECT pick_no, round, draft_slot, player_id FROM draft_pick_made WHERE draft_id=?",
-                             (d["draft_id"],)):
+        made = store.query("SELECT pick_no, round, draft_slot, roster_id, player_id FROM draft_pick_made "
+                           "WHERE draft_id=?", (d["draft_id"],))
+        by_no = {p["pick_no"]: val.get(p["player_id"], 0.0) for p in made if p["player_id"]}
+        for p in made:
             orig = s2r.get(p["draft_slot"])
             if orig is None or not p["player_id"]:
                 continue
             in_round = p["pick_no"] - (p["round"] - 1) * n
+            near = [v for k, v in by_no.items() if abs(k - p["pick_no"]) <= SLOT_WINDOW]
             out[(str(d["season"]), p["round"], orig)] = {
-                "player_id": p["player_id"], "pick": f"{p['round']}.{in_round:02d}", "pick_no": p["pick_no"]}
+                "player_id": p["player_id"], "pick": f"{p['round']}.{in_round:02d}", "pick_no": p["pick_no"],
+                "by_roster": p["roster_id"], "league_id": d["league_id"],
+                "slot_value": sum(near) / len(near) if near else 0.0}
     return out
 
 
@@ -84,7 +97,7 @@ def trade_log(store: Store) -> list[dict]:
         "SELECT player_id, value FROM player_value WHERE snapshot_date=?", (vd,))}
     info = {r["player_id"]: r for r in store.query("SELECT player_id, full_name, position, team FROM player")}
     future = {(str(r["season"]), r["round"], r["original_roster_id"]): r for r in store.query("SELECT * FROM pick_value")}
-    used = _pick_player_map(store)
+    used = _pick_player_map(store, val)
     snap = store.query("SELECT MAX(snapshot_date) d FROM roster_snapshot WHERE league_id=?", (cur,))[0]["d"]
     now_on = {r["player_id"]: r["roster_id"] for r in store.query(
         "SELECT roster_id, player_id FROM roster_snapshot WHERE league_id=? AND snapshot_date=?", (cur, snap))}
@@ -127,7 +140,14 @@ def trade_log(store: Store) -> list[dict]:
                      "orig": orig_cur, "orig_team": orig_nm.get("team")}
                 hit = used.get((season, rnd, orig))
                 fut = future.get((season, rnd, orig_cur if orig_cur is not None else orig))
-                if hit:
+                if hit and hit.get("by_roster") is not None and hit["by_roster"] != m["roster_id"]:
+                    # traded on before the draft: another team chose the player, so this team is
+                    # credited with what the slot was worth, not with that pick's hit or miss
+                    _, by_cur, by_nm = team_of(hit["league_id"], hit["by_roster"])
+                    a.update(status="flipped", pick=hit["pick"], became=player(hit["player_id"]),
+                             drafted_by=by_cur, drafted_by_team=by_nm.get("team"),
+                             value=round(hit["slot_value"]))
+                elif hit:
                     b = player(hit["player_id"])
                     a.update(status="used", pick=hit["pick"], became=b, value=b["value"])
                 elif fut:

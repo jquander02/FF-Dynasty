@@ -40,8 +40,10 @@ that column (tap again to reverse); player and pick lists have a "Sort by" menu.
   totals in view.
 - **Past trades:** every trade in the league's history, for all teams or one team (optionally
   only those with a given partner). Each side shows what it got, valued today and where each
-  player is now. Used draft picks show the player taken with them ("2026 round 1, 1.03, became
-  ...") and future picks their projected slot. Each trade gets a verdict (won, lost or even
+  player is now. A pick the team used shows the player it took ("2026 round 1, 1.03, became
+  ..."); a pick the team traded on before the draft counts at what that slot was worth (today's
+  average value of the players taken within three picks of it), since another team chose the
+  player; future picks show their projected slot. Each trade gets a verdict (won, lost or even
   within 10%, using the trade lab's package math), and a team view adds its trade record, net
   value and picks in/out. Linked from League, Team, Managers and the trade lab.
 - **Player sheet:** tap any player anywhere for his value breakdown (model, FantasyCalc,

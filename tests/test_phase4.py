@@ -112,7 +112,7 @@ class Phase4PipelineTest(Phase3PipelineTest):
 
     def test_used_pick_becomes_player(self):
         # an earlier trade sends the 2026 1st (original owner: my roster) to roster 7; the draft
-        # order puts that pick at 1.06, where my roster took player 9999
+        # order puts that pick at 1.06, where player 9999 was taken
         lid = self.q("SELECT league_id FROM league_season WHERE is_current=1")[0]["league_id"]
         self.store.upsert("txn", [{"transaction_id": "t-old", "league_id": lid, "season": "2026", "week": 1,
                                    "type": "trade", "status": "complete", "created": 1780000000000,
@@ -127,9 +127,19 @@ class Phase4PipelineTest(Phase3PipelineTest):
         self.assertEqual([t["id"] for t in log], ["t-trade-1", "t-old"])   # newest first
         old = log[1]
         got7 = [s for s in old["sides"] if s["roster_id"] == 7][0]["got"][0]
-        self.assertEqual(got7["status"], "used")
+        # my roster made that pick (the pick came back before the draft): roster 7 flipped it, so
+        # it's credited with the slot's worth, not with the player my roster chose
+        self.assertEqual(got7["status"], "flipped")
         self.assertEqual(got7["pick"], "1.06")
         self.assertEqual(got7["became"]["id"], "9999")
+        self.assertEqual(got7["drafted_by"], MY_ROSTER)
+        self.assertGreaterEqual(got7["value"], 0)
+        # when roster 7 makes the pick itself, it's credited with the player taken
+        self.store.conn.execute("UPDATE draft_pick_made SET roster_id=7 WHERE player_id='9999'")
+        self.store.commit()
+        log = owners.trade_log(self.store)
+        got7 = [s for s in log[1]["sides"] if s["roster_id"] == 7][0]["got"][0]
+        self.assertEqual(got7["status"], "used")
         self.assertEqual(got7["became"]["name"], "Rookie Unknown")
         self.assertEqual(got7["value"], got7["became"]["value"])
         # verdict fields and package math
