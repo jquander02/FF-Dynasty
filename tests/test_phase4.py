@@ -92,6 +92,13 @@ class Phase4PipelineTest(Phase3PipelineTest):
         self.assertTrue(sc["seasons"])
         self.assertIn("eff", sc["seasons"][-1])
         self.assertEqual(sc["vs"][0]["n"], 1)
+        # other leagues: one redraft trade, counted for tendencies only (not the trade record)
+        ew = sc["elsewhere"]
+        self.assertEqual((ew["trades"], ew["redraft_trades"], ew["dynasty_trades"]), (1, 1, 0))
+        self.assertEqual(ew["pieces"], {"got": 2.0, "gave": 1.0})
+        self.assertIsNone(ew["got_age"])                   # redraft: ages don't count
+        self.assertEqual(sc["all"]["trades"], 2)
+        self.assertEqual(rec["won"] + rec["lost"] + rec["even"], 1)
 
     def test_trade_review(self):
         rows = self.q("SELECT * FROM trade_review")

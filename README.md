@@ -170,6 +170,10 @@ redo windows, odds and pick values with the latest scores.
 - **Owner profiles:** trades and partners, each past trade judged by what both sides hold now,
   positions traded for, picks bought vs sold, waiver claims and FAAB, early-round draft habits
   here and in their other Sleeper leagues, with short tags for what stands out.
+- **Other leagues:** trades league-mates made in their other Sleeper leagues (dynasty, keeper and
+  redraft; table `ext_trade`) feed the scouting reports' habits only: trade frequency, positions
+  bought and sold, 2-for-1s, and (dynasty/keeper only) player ages and picks. Never valued or
+  counted in trade records. The first backfill is capped at 2,500 API calls per run and resumes.
 
 Tables: `owner_profile`, `trade_review`, `trade_suggestion`.
 

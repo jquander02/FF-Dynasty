@@ -173,6 +173,13 @@ class PipelineTest(unittest.TestCase):
         picks = self.q("SELECT * FROM ext_draft_pick ORDER BY pick_no")
         self.assertEqual([(p["user_id"], p["position"]) for p in picks], [(ME, "RB"), (ME, "TE")])
         self.assertEqual(self.q("SELECT ppr FROM owner_league WHERE league_id='OTHER-1'")[0]["ppr"], 0.5)
+        # trades in other leagues: only league-mates' sides, trades only
+        rows = self.q("SELECT * FROM ext_trade")
+        self.assertEqual([(r["transaction_id"], r["user_id"]) for r in rows], [("x-1", ME)])
+        r = rows[0]
+        self.assertEqual(r["league_type"], 0)
+        self.assertEqual(sorted(x["id"] for x in json.loads(r["got"])), ["1111", "6794"])
+        self.assertEqual([x["id"] for x in json.loads(r["gave"])], ["4034"])
 
     def test_second_run_skips_finished_season(self):
         self.ingest()

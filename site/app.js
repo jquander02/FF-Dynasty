@@ -866,6 +866,33 @@
     return body ? `<section class="mgr-sec"><h3>${title}</h3>${body}</section>` : "";
   }
 
+  // Trades in the manager's other Sleeper leagues: tendencies only (other formats, so no values).
+  function elsewhereBlock(e) {
+    if (!e || !e.leagues_in) return "";
+    const types = e.league_types || {};
+    const where = [types.dynasty ? plural(types.dynasty, "dynasty or keeper league") : "", types.redraft ? plural(types.redraft, "redraft league") : ""].filter(Boolean).join(" and ");
+    if (!e.trades) return `<h2>In their other leagues</h2><p class="note">No trades in their ${where} on Sleeper.</p>`;
+    const posList = (o) => Object.entries(o || {}).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(", ") || "–";
+    const statRow = (label, value, note = "") => `<div class="stat"><span>${label}</span><b>${value}</b>${note ? `<small>${note}</small>` : ""}</div>`;
+    const pk = e.picks || {}, pc = e.pieces || {}, tm = e.timing || {};
+    const ages = e.got_age != null && e.gave_age != null ? `${e.got_age} / ${e.gave_age}` : "–";
+    return `
+      <h2>In their other leagues</h2>
+      <div class="group pad">
+        <p class="note" style="margin:0 0 10px">${plural(e.trades, "trade")} across ${where} (${e.dynasty_trades || 0} dynasty, ${e.redraft_trades || 0} redraft). Shown for habits only: those leagues use other formats, so the trades aren't valued.</p>
+        <div class="stats">
+          ${statRow("Trades per league", e.per_league ?? "–", "per league-season")}
+          ${statRow("Pieces per deal", pc.got != null ? `${pc.got} / ${pc.gave}` : "–", "get / give")}
+          ${statRow("Player age", ages, "get / give, dynasty only")}
+          ${statRow("Picks", `${pk.got || 0} / ${pk.gave || 0}`, `firsts ${pk.firsts_got || 0} / ${pk.firsts_gave || 0}`)}
+          ${statRow("When", `${tm.in_season || 0} / ${tm.offseason || 0}`, "in season / offseason")}
+        </div>
+        <dl class="facts">
+          <dt>Gets</dt><dd>${posList(e.got_pos)}</dd>
+          <dt>Gives</dt><dd>${posList(e.gave_pos)}</dd>
+        </dl>
+      </div>`;
+  }
   function scoutReport(p) {
     const sc = p.scout || {};
     const P = (D.plan || {})[p.roster_id];
@@ -930,6 +957,7 @@
           ${sc.best_trade ? `<dt>Best / worst</dt><dd><span class="up">${signed(sc.best_margin)}</span> / <span class="${signCls(sc.worst_margin)}">${signed(sc.worst_margin)}</span> <a href="#trades" data-hist="${p.roster_id}" data-histsort="best">see them</a></dd>` : ""}
         </dl>
       </div>
+      ${elsewhereBlock(sc.elsewhere)}
       <div class="cols">
         <div>
           <h2>Track record</h2>
@@ -980,6 +1008,7 @@
       ${sortableTable("owners", cols, O.profiles, { key: "trades", dir: -1 }, (x) => (x.roster_id === p.roster_id ? "me" : ""))}
       ${how("How the scouting reports work", [
         `Built from every trade, waiver claim and draft in this league's history. Trade results count each player's banked value (his starts for the team since the trade) plus what's left of his value, with used draft picks counted as the player taken (or, for picks flipped before the draft, the slot's worth); a trade is even within 10%. "Pieces per deal" and "player age" compare what they get with what they give.`,
+        `Trades in their other Sleeper leagues (dynasty, keeper and redraft) show their habits: how often they trade, which positions they buy and sell, 2-for-1s, and, from dynasty and keeper leagues only, player ages and draft picks. Those leagues use other formats, so their trades are never valued or counted in the record above; the tags (like "Trades for youth" or "Consolidates") use both.`,
         `Needs and players they'd move come from their team plan (the Plan tab): weak spots are starting slots below the league's median starter. Lineups is points scored as a share of the best lineup they could have started. Advice is generated from all of this; treat it as a starting point.`,
       ])}`;
   }

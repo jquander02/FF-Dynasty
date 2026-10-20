@@ -339,6 +339,73 @@ def trade_log(store: Store) -> list[dict]:
     return out
 
 
+DYNASTY_TYPES = (1, 2)   # Sleeper league type: 0 redraft, 1 keeper, 2 dynasty
+
+
+def _elsewhere(store: Store, age: dict) -> dict:
+    """Per manager: tendencies from trades in their other Sleeper leagues (ext_trade). Used for
+    scouting only, never valued: other leagues score and value players differently. Ages and picks
+    count only from dynasty and keeper leagues (in redraft neither matters)."""
+    if not store.query("SELECT 1 FROM sqlite_master WHERE name='ext_trade'"):
+        return {}
+    from datetime import datetime, timezone
+    pos = {r["player_id"]: r["position"] for r in store.query("SELECT player_id, position FROM player")}
+    now = datetime.now(tz=timezone.utc).timestamp() * 1000
+    leagues_in = Counter()
+    types_in = defaultdict(Counter)
+    ours = {r["league_id"] for r in store.query("SELECT league_id FROM league_season")}
+    for r in store.query("SELECT user_id, league_id, league_type FROM owner_league"):
+        if r["league_id"] not in ours:
+            leagues_in[r["user_id"]] += 1
+            types_in[r["user_id"]]["dynasty" if r["league_type"] in DYNASTY_TYPES else "redraft"] += 1
+    acc = defaultdict(lambda: {"n": 0, "dyn": 0, "red": 0, "leagues": set(), "got_pos": Counter(), "gave_pos": Counter(),
+                               "got_age": [], "gave_age": [], "got_picks": 0, "gave_picks": 0, "got_firsts": 0,
+                               "gave_firsts": 0, "pieces_got": [], "pieces_gave": [], "in_season": 0, "offseason": 0})
+    for r in store.query("SELECT * FROM ext_trade"):
+        a = acc[r["user_id"]]
+        dyn = r["league_type"] in DYNASTY_TYPES
+        a["n"] += 1
+        a["dyn" if dyn else "red"] += 1
+        a["leagues"].add(r["league_id"])
+        yrs = max(0.0, (now - (r["ts"] or now)) / (365.25 * 86400 * 1000))
+        when = datetime.fromtimestamp((r["ts"] or 0) / 1000, tz=timezone.utc) if r["ts"] else None
+        a["in_season" if when and (when.month >= 9 or when.month == 1) else "offseason"] += 1
+        got, gave = json.loads(r["got"] or "[]"), json.loads(r["gave"] or "[]")
+        for lst, side in ((got, "got"), (gave, "gave")):
+            for x in lst:
+                if x["k"] == "player":
+                    if pos.get(x["id"]) in SKILL:
+                        a[f"{side}_pos"][pos[x["id"]]] += 1
+                    if dyn and age.get(x["id"]):
+                        a[f"{side}_age"].append(age[x["id"]] - yrs)   # his age on the day of the trade
+                elif x["k"] == "pick" and dyn:
+                    a[f"{side}_picks"] += 1
+                    if x.get("round") == 1:
+                        a[f"{side}_firsts"] += 1
+        a["pieces_got"].append(len(got))
+        a["pieces_gave"].append(len(gave))
+    out = {}
+    for uid, a in acc.items():
+        n = a["n"]
+        out[uid] = {
+            "trades": n, "dynasty_trades": a["dyn"], "redraft_trades": a["red"],
+            "leagues_traded_in": len(a["leagues"]), "leagues_in": leagues_in.get(uid, 0),
+            "league_types": dict(types_in.get(uid, {})),
+            "per_league": round(n / leagues_in[uid], 2) if leagues_in.get(uid) else None,
+            "got_pos": dict(a["got_pos"]), "gave_pos": dict(a["gave_pos"]),
+            "got_age": round(sum(a["got_age"]) / len(a["got_age"]), 1) if a["got_age"] else None,
+            "gave_age": round(sum(a["gave_age"]) / len(a["gave_age"]), 1) if a["gave_age"] else None,
+            "picks": {"got": a["got_picks"], "gave": a["gave_picks"], "firsts_got": a["got_firsts"],
+                      "firsts_gave": a["gave_firsts"]},
+            "pieces": {"got": round(sum(a["pieces_got"]) / n, 2), "gave": round(sum(a["pieces_gave"]) / n, 2)},
+            "timing": {"in_season": a["in_season"], "offseason": a["offseason"]},
+            "_raw": a,
+        }
+    for uid in leagues_in:
+        out.setdefault(uid, {"trades": 0, "leagues_in": leagues_in[uid], "league_types": dict(types_in[uid])})
+    return out
+
+
 def _scouting(store: Store, log: list[dict], owner_of: dict, names: dict) -> dict:
     """Per-manager scouting data: trade record and tendencies, activity, lineup efficiency,
     season finishes and rookie-draft results. Keyed by user id."""
@@ -442,11 +509,29 @@ def _scouting(store: Store, log: list[dict], owner_of: dict, names: dict) -> dic
                                                "value": round(v)})
     round_avg = {r: sum(v) / len(v) for r, v in by_round.items() if v}
 
+    elsewhere = _elsewhere(store, age)
+
+    def combined(t, n, e):
+        """This league's trades plus other leagues' trades, for tendency tags (no values involved)."""
+        raw = (e or {}).get("_raw")
+        if not raw:
+            raw = {"n": 0, "got_age": [], "gave_age": [], "pieces_got": [], "pieces_gave": [], "got_pos": Counter(),
+                   "got_picks": 0, "gave_picks": 0}
+        ga, va = t["got_age"] + raw["got_age"], t["gave_age"] + raw["gave_age"]
+        pg, pv = t["pieces_got"] + raw["pieces_got"], t["pieces_gave"] + raw["pieces_gave"]
+        tot = n + raw["n"]
+        return {"trades": tot, "got_pos": dict(t["got_pos"] + raw["got_pos"]),
+                "got_age": round(sum(ga) / len(ga), 1) if ga else None, "got_age_n": len(ga),
+                "gave_age": round(sum(va) / len(va), 1) if va else None, "gave_age_n": len(va),
+                "pieces": {"got": round(sum(pg) / tot, 2) if tot else None, "gave": round(sum(pv) / tot, 2) if tot else None},
+                "net_picks": (t["got_picks"] + raw["got_picks"]) - (t["gave_picks"] + raw["gave_picks"])}
+
     result = {}
     uids = set(out) | set(act) | set(seasons) | set(rookie)
     for uid in uids:
         t = out[uid]["tr"]
         n = t["won"] + t["lost"] + t["even"]
+        e = elsewhere.get(uid)
         picks_made = rookie.get(uid, [])
         exp = sum(round_avg.get(p["round"], 0) for p in picks_made)
         got = sum(p["value"] for p in picks_made)
@@ -469,6 +554,8 @@ def _scouting(store: Store, log: list[dict], owner_of: dict, names: dict) -> dic
             "seasons": seasons.get(uid, []),
             "rookie_picks": sorted(picks_made, key=lambda p: (p["season"], p["pick_no"]), reverse=True)[:12],
             "rookie_score": round(got / exp, 2) if exp else None,
+            "elsewhere": {k: v for k, v in (e or {}).items() if k != "_raw"} or None,
+            "all": combined(t, n, e),
         }
     return result
 
@@ -560,22 +647,26 @@ def build(store: Store) -> dict:
         n_mix = sum(mix.values())
         share = {k: round(mix[k] / n_mix, 2) for k in SKILL} if n_mix else {}
         tags = []
-        if p["trades"] == 0:
+        sc = scout.get(uid, {})
+        al = sc.get("all") or {}
+        ew = sc.get("elsewhere") or {}
+        if p["trades"] == 0 and not ew.get("trades"):
             tags.append("Hasn't traded")
-        elif p["trades"] >= max(3, 1.5 * avg_trades):
+        elif p["trades"] >= max(3, 1.5 * avg_trades) or (ew.get("per_league") or 0) >= 2.5:
             tags.append("Active trader")
         if p["trades"] and p["net"] >= 1500:
             tags.append("Wins trades (by today's values)")
         elif p["trades"] and p["net"] <= -1500:
             tags.append("Loses trades (by today's values)")
-        net_picks = p["picks_in"] - p["picks_out"]
+        net_picks = al.get("net_picks", p["picks_in"] - p["picks_out"])   # here + other dynasty leagues
         if net_picks >= 2:
             tags.append("Collects picks")
         elif net_picks <= -2:
             tags.append("Sells picks")
-        if p["acq_pos"]:
-            top, cnt = p["acq_pos"].most_common(1)[0]
-            if cnt >= 3 and cnt / sum(p["acq_pos"].values()) >= 0.5:
+        acq = Counter(al.get("got_pos") or {}) or p["acq_pos"]
+        if acq:
+            top, cnt = acq.most_common(1)[0]
+            if cnt >= 3 and cnt / sum(acq.values()) >= 0.5:
                 tags.append(f"Trades for {top}s")
         if uid in faab_rank[:3] and p["faab"] > 0:
             tags.append("Big FAAB spender")
@@ -583,14 +674,13 @@ def build(store: Store) -> dict:
             for k in SKILL:
                 if share.get(k, 0) - base_share.get(k, 0) >= 0.12:
                     tags.append(f"Drafts {k}s early")
-        sc = scout.get(uid, {})
-        if sc.get("got_age") and sc.get("gave_age"):
-            if sc["gave_age"] - sc["got_age"] >= 2:
+        if al.get("got_age") and al.get("gave_age") and min(al["got_age_n"], al["gave_age_n"]) >= 3:
+            if al["gave_age"] - al["got_age"] >= 2:
                 tags.append("Trades for youth")
-            elif sc["got_age"] - sc["gave_age"] >= 2:
+            elif al["got_age"] - al["gave_age"] >= 2:
                 tags.append("Trades for veterans")
-        pcs = sc.get("pieces") or {}
-        if p["trades"] >= 3 and pcs.get("got") and pcs.get("gave"):
+        pcs = al.get("pieces") or {}
+        if al.get("trades", 0) >= 3 and pcs.get("got") and pcs.get("gave"):
             if pcs["gave"] - pcs["got"] >= 0.5:
                 tags.append("Consolidates (2-for-1s)")
             elif pcs["got"] - pcs["gave"] >= 0.5:

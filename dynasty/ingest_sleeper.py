@@ -578,6 +578,76 @@ def ingest_owner_leagues(
     return n_leagues, n_picks
 
 
+def ext_trade_rows(t: dict, league: dict, owners: dict, mates: set) -> list[dict]:
+    """One row per league-mate side of a completed trade in another league."""
+    if t.get("type") != "trade" or t.get("status") != "complete":
+        return []
+    adds, drops = t.get("adds") or {}, t.get("drops") or {}
+    picks = t.get("draft_picks") or []
+    rids = t.get("roster_ids") or []
+    out = []
+    for rid in rids:
+        uid = next((u for u in owners.get(rid, []) if u in mates), None)
+        if not uid:
+            continue
+        got = [{"k": "player", "id": pid} for pid, r in adds.items() if r == rid]
+        got += [{"k": "pick", "season": str(p.get("season")), "round": p.get("round")} for p in picks
+                if p.get("owner_id") == rid]
+        gave = [{"k": "player", "id": pid} for pid, r in drops.items() if r == rid and adds.get(pid) not in (None, rid)]
+        gave += [{"k": "pick", "season": str(p.get("season")), "round": p.get("round")} for p in picks
+                 if p.get("previous_owner_id") == rid]
+        out.append({"transaction_id": str(t["transaction_id"]), "user_id": uid, "league_id": league["league_id"],
+                    "season": league["season"], "week": t.get("leg"),
+                    "ts": t.get("status_updated") or t.get("created"), "league_type": league.get("league_type"),
+                    "teams": league.get("total_rosters"), "partners": max(0, len(rids) - 1),
+                    "got": js(got), "gave": js(gave)})
+    return out
+
+
+def ingest_owner_trades(store: Store, client: SleeperClient, our_league_ids: set[str], state: dict,
+                        max_week: int = MAX_WEEK, call_budget: int = 2500) -> int:
+    """Trades our league-mates made in their other leagues (dynasty, keeper and redraft): every week of
+    each league they're in, finished weeks fetched once. The first backfill can be thousands of calls,
+    so each run stops after call_budget API calls and the next run carries on where it left off."""
+    start_calls = client.calls
+    mates = {r["owner_id"] for r in store.query("SELECT DISTINCT owner_id FROM roster WHERE owner_id IS NOT NULL")}
+    leagues = {}
+    for r in store.query("SELECT league_id, season, status, league_type, total_rosters FROM owner_league"):
+        if r["league_id"] not in our_league_ids:
+            leagues[r["league_id"]] = dict(r)
+    cur_season, cur_week = str(state.get("season")), int(state.get("week") or 0)
+    n = 0
+    for lid, lg in sorted(leagues.items(), key=lambda kv: kv[1]["season"], reverse=True):
+        if client.calls - start_calls >= call_budget:
+            log.info("other-league trades: call budget reached, continuing next run")
+            break
+        finished_league = lg["status"] == "complete" or lg["season"] < cur_season
+        weeks = [w for w in range(0, max_week + 1) if not store.is_done(f"ext_txn:{lid}:{w}")]
+        if not weeks:
+            continue
+        try:
+            rosters = client.rosters(lid, ttl=FOREVER if finished_league else DAY) or []
+        except Exception as exc:  # noqa: BLE001 - another league's data must never block the refresh
+            log.warning("other league %s rosters failed: %s", lid, exc)
+            continue
+        owners = {r["roster_id"]: [r.get("owner_id")] + list(r.get("co_owners") or []) for r in rosters}
+        if not any(u in mates for us in owners.values() for u in us):
+            continue
+        for w in weeks:
+            done = finished_league or (lg["season"] == cur_season and w < cur_week - 1)
+            try:
+                txns = client.transactions(lid, w, ttl=FOREVER if done else DAY)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("other league %s week %s transactions failed: %s", lid, w, exc)
+                continue
+            rows = [row for t in txns for row in ext_trade_rows(t, lg, owners, mates)]
+            n += store.upsert("ext_trade", rows)
+            if done:
+                store.mark_done(f"ext_txn:{lid}:{w}")
+        store.commit()
+    return n
+
+
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
@@ -683,6 +753,7 @@ def run(
         )
         res.add("owner_leagues", nl)
         res.add("owner_ext_picks", np_)
+        res.add("owner_ext_trades", ingest_owner_trades(store, client, {lg["league_id"] for lg in chain}, state))
 
     store.commit()
     return res

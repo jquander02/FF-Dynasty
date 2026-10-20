@@ -178,6 +178,8 @@ def build_routes() -> dict:
         f"user/{ME}/leagues/nfl/2026": [league, other_league],
         f"user/{ME}/leagues/nfl/2025": [prev],
         "league/OTHER-1/drafts": other_drafts,
+        "league/OTHER-1/rosters": [{"roster_id": 1, "owner_id": ME}, {"roster_id": 2, "owner_id": "someone-else"},
+                                   {"roster_id": 3, "owner_id": OWNER_IDS[6], "co_owners": None}],
         "draft/OTHER-D/picks": other_picks,
     }
     def future(week):  # Sleeper returns next weeks' pairings with 0 points
@@ -191,6 +193,15 @@ def build_routes() -> dict:
     for w in range(0, 19):
         routes[f"league/{LEAGUE}/transactions/{w}"] = {2: tx_week2, 3: tx_week3}.get(w, [])
         routes[f"league/{PREV}/transactions/{w}"] = []
+    # a trade in my redraft side league: I get 6794 + 1111 for 4034 (a 2-for-1 the other way)
+    for w in range(0, 19):
+        routes[f"league/OTHER-1/transactions/{w}"] = [
+            {"transaction_id": "x-1", "type": "trade", "status": "complete", "leg": 4,
+             "created": 1791000000000, "status_updated": 1791000000000, "roster_ids": [1, 2],
+             "adds": {"6794": 1, "1111": 1, "4034": 2}, "drops": {"6794": 2, "1111": 2, "4034": 1},
+             "draft_picks": [], "waiver_budget": []},
+            {"transaction_id": "x-2", "type": "waiver", "status": "complete", "leg": 4, "roster_ids": [1],
+             "adds": {"9999": 1}, "drops": None}] if w == 4 else []
     # Sleeper's weekly projections: the app's list shape for week 6, nothing published later
     pos = "&".join(f"position[]={p}" for p in ("QB", "RB", "WR", "TE", "K", "DEF"))
     for w in range(1, 19):

@@ -176,6 +176,14 @@ CREATE TABLE IF NOT EXISTS owner_league (
 );
 
 -- Picks our league-mates made in their OTHER leagues' drafts.
+-- Trades our league-mates made in their OTHER leagues (scouting tendencies only, never valued).
+CREATE TABLE IF NOT EXISTS ext_trade (
+    transaction_id TEXT, user_id TEXT, league_id TEXT, season TEXT, week INTEGER, ts INTEGER,
+    league_type INTEGER, teams INTEGER, partners INTEGER,
+    got TEXT, gave TEXT,               -- JSON lists: {"k":"player","id":..} | {"k":"pick","season":..,"round":..}
+    PRIMARY KEY (transaction_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS ext_draft_pick (
     draft_id TEXT, pick_no INTEGER, league_id TEXT, season TEXT,
     draft_type TEXT, player_type INTEGER, teams INTEGER,
