@@ -9,7 +9,12 @@
   const panel = sheet.querySelector(".sheet-panel");
   const POS_ORDER = ["QB", "RB", "WR", "TE", "K", "DEF"];
   const SKILLPOS = ["QB", "RB", "WR", "TE"];
-  const FILES = ["meta", "teams", "rosters", "picks", "activity", "history", "values", "plan", "owners", "finder", "trades", "weekly"];
+  // League and Past trades read only the public files; everything else is behind the PIN (vault.json).
+  const PUBLIC_FILES = ["meta", "teams", "history", "trades"];
+  const PRIVATE_FILES = ["rosters", "picks", "activity", "values", "plan", "owners", "finder", "weekly"];
+  const OPEN_TABS = new Set(["league", "trades", "history", "unlock"]);
+  let vault = null;            // the encrypted bundle, when the site is locked
+  const VAULT_KEY = "vaultKey";
 
   const state = {
     team: null,            // the team being viewed on Team / Plan, and "Team A" in the trade lab
@@ -17,7 +22,7 @@
     give: new Set(), get: new Set(),
     pickTeam: "all", valOwner: "all", valPos: "ALL", valQuery: "", valLimit: 100,
     valSort: "val", rosterSort: "val", pickSort: "slot",
-    histTeam: "all", histWith: "all", histSort: "new", mgr: null, weekView: "lineup", tradeView: "total",
+    histTeam: "all", histWith: "all", histSort: "new", mgr: null, weekView: "lineup", tradeView: "total", locked: false, afterUnlock: null,
     sort: {},              // per-table column sort: id -> {key, dir}
     lastFocus: null,
   };
@@ -74,11 +79,28 @@
   }
 
   // ---------------------------------------------------------------- data
+  const getJSON = (f, bust) => fetch(`data/${f}.json${bust ? `?t=${Date.now()}` : ""}`, { cache: bust ? "reload" : "no-cache" })
+    .then((r) => (r.ok ? r.json() : null)).catch(() => null);
   async function load(bust = false) {
-    const q = bust ? `?t=${Date.now()}` : "";
-    const got = await Promise.all(FILES.map((f) =>
-      fetch(`data/${f}.json${q}`, { cache: bust ? "reload" : "no-cache" }).then((r) => (r.ok ? r.json() : null)).catch(() => null)));
-    FILES.forEach((f, i) => (D[f] = got[i]));
+    const [pub, v] = await Promise.all([Promise.all(PUBLIC_FILES.map((f) => getJSON(f, bust))), getJSON("vault", bust)]);
+    PUBLIC_FILES.forEach((f, i) => (D[f] = pub[i]));
+    PRIVATE_FILES.forEach((f) => (D[f] = null));
+    vault = v;
+    if (!vault) {                         // no PIN set up: everything is published openly
+      const got = await Promise.all(PRIVATE_FILES.map((f) => getJSON(f, bust)));
+      PRIVATE_FILES.forEach((f, i) => (D[f] = got[i]));
+    } else {
+      const saved = store.get(VAULT_KEY);
+      if (saved) {
+        try { Object.assign(D, await openVault(vault, b64(saved))); } catch { store.set(VAULT_KEY, ""); }
+      }
+    }
+    state.locked = !!vault && !D.values;
+    document.body.classList.toggle("locked", state.locked);
+    document.body.classList.toggle("has-vault", !!vault);
+    index();
+  }
+  function index() {
     judged.clear();
     byId = {};
     for (const p of D.values || []) byId[p.id] = { ...p };
@@ -92,6 +114,49 @@
     state.tradeView = store.get("tradeView") || state.tradeView;
     if (!teamOf(state.team)) state.team = null;
   }
+
+  // ---------------------------------------------------------------- PIN lock (see dynasty/vault.py)
+  const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  const toB64 = (u8) => btoa(String.fromCharCode(...u8));
+  async function deriveKey(pin, v) {
+    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveBits"]);
+    const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: b64(v.salt), iterations: v.iter, hash: "SHA-256" }, base, 256);
+    return new Uint8Array(bits);
+  }
+  async function openVault(v, raw) {
+    const key = await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["decrypt"]);
+    const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64(v.iv) }, key, b64(v.ct));
+    const text = await new Response(new Blob([plain]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+    return JSON.parse(text);
+  }
+  async function unlock(pin) {
+    const raw = await deriveKey(pin, vault);
+    const files = await openVault(vault, raw);      // throws on a wrong PIN
+    Object.assign(D, files);
+    store.set(VAULT_KEY, toB64(raw));
+    state.locked = false;
+    document.body.classList.remove("locked");
+    index();
+  }
+  function lockDevice() {
+    store.set(VAULT_KEY, "");
+    PRIVATE_FILES.forEach((f) => (D[f] = null));
+    state.locked = !!vault;
+    document.body.classList.toggle("locked", state.locked);
+    index();
+  }
+  function renderUnlock() {
+    const want = state.afterUnlock && !OPEN_TABS.has(state.afterUnlock) ? TITLES[state.afterUnlock] : null;
+    return `
+      <form class="unlock" id="unlock-form" autocomplete="off">
+        <h2>Enter your PIN</h2>
+        <p class="note">${want ? `${esc(want)} is` : "Everything beyond League and Past trades is"} for the league owner. This device remembers the PIN once it's right.</p>
+        <input id="pin" class="pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" aria-label="4-digit PIN" placeholder="••••">
+        <button class="btn primary block" type="submit">Unlock</button>
+        <p class="note pin-msg" id="pin-msg" role="alert"></p>
+      </form>`;
+  }
+
   const setTeam = (rid) => { state.team = rid; store.set("team", rid ?? ""); };
   const focusTeam = () => state.team ?? standings()[0]?.roster_id ?? null;
 
@@ -193,7 +258,7 @@
     const cols = [
       { key: "rank", label: "#", value: (t) => rankOf.get(t.roster_id), html: (t) => rankOf.get(t.roster_id) },
       { key: "team", label: "Team", value: (t) => t.team.toLowerCase(),
-        html: (t) => `<a class="tname" href="#team" data-roster="${t.roster_id}">${esc(t.team)}</a><span class="sub2"><span class="user">@${esc(t.owner)}</span>${winChip(t.window)}</span>` },
+        html: (t) => `${state.locked ? `<span class="tname">${esc(t.team)}</span>` : `<a class="tname" href="#team" data-roster="${t.roster_id}">${esc(t.team)}</a>`}<span class="sub2"><span class="user">@${esc(t.owner)}</span>${winChip(t.window)}</span>` },
       { key: "wl", label: "W–L", num: 1, value: (t) => t.wins + 0.5 * (t.ties || 0) + t.pf / 1e5, html: record },
       { key: "pf", label: "PF", num: 1, wide: 1, value: (t) => t.pf, html: (t) => fmt(t.pf, 1) },
       { key: "po", label: "Playoffs", num: 1, value: (t) => t.p_playoffs, html: (t) => pct(t.p_playoffs) },
@@ -211,7 +276,7 @@
       <h2>Standings</h2>
       ${sortableTable("standings", cols, list, { key: "rank", dir: 1 }, (t) => (t.roster_id === state.team ? "me" : ""))}
       ${windowChart(list)}
-      <div class="links"><a href="#trades" data-hist="all">Past trades</a><a href="#owners">Managers</a><a href="#activity">Recent moves</a><a href="#history">Champions</a></div>
+      <div class="links"><a href="#trades" data-hist="all">Past trades</a>${state.locked ? "" : `<a href="#owners">Managers</a><a href="#activity">Recent moves</a>`}<a href="#history">Champions</a></div>
       ${how("How these numbers work", [
         `Tap a column heading to sort; tap it again to reverse. Playoff odds come from simulating the rest of the regular season 10,000 times on Sleeper's schedule. Value is the sum of a roster's player values.`,
         `Windows: each team's best possible lineup is projected for the rest of this season and the next two. <i>Dynasty power</i> is strong now and later, <i>Win now</i> is strong now only, <i>Rising</i> is stronger later, <i>Rebuild</i> is weak both ways.`,
@@ -1269,13 +1334,15 @@
   }
 
   // ---------------------------------------------------------------- router
-  const TABS = { league: renderLeague, week: renderWeek, team: renderTeam, values: renderValues, picks: renderPicks, plan: renderPlan, trade: renderTrade, trades: renderPastTrades, owners: renderOwners, activity: renderActivity, history: renderHistory };
-  const TITLES = { league: "League", week: "Week", team: "Team", values: "Values", picks: "Picks", plan: "Plan", trade: "Trade", trades: "Past trades", owners: "Managers", activity: "Moves", history: "History" };
+  const TABS = { league: renderLeague, week: renderWeek, team: renderTeam, values: renderValues, picks: renderPicks, plan: renderPlan, trade: renderTrade, trades: renderPastTrades, owners: renderOwners, activity: renderActivity, history: renderHistory, unlock: renderUnlock };
+  const TITLES = { league: "League", week: "Week", team: "Team", values: "Values", picks: "Picks", plan: "Plan", trade: "Trade", trades: "Past trades", owners: "Managers", activity: "Moves", history: "History", unlock: "Unlock" };
   const FIRST_DIR = { rank: 1, team: 1, age: 1, champ: 1 };   // first tap: ascending for these, descending otherwise
   function route(keepScroll = false) {
     const y = window.scrollY;
     const tab = (location.hash || "#league").slice(1);
-    const key = TABS[tab] ? tab : "league";
+    let key = TABS[tab] ? tab : "league";
+    if (state.locked && !OPEN_TABS.has(key)) { state.afterUnlock = key; key = "unlock"; }
+    if (!state.locked && key === "unlock") key = "league";
     view.innerHTML = D.meta ? TABS[key]() : `<div class="empty"><b>Couldn't load league data</b>Check your connection, then tap the reload button at the top.</div>`;
     document.body.classList.toggle("has-tray", key === "trade" && (state.give.size > 0 || state.get.size > 0));
     document.querySelectorAll("[data-tab]").forEach((a) => {
@@ -1392,6 +1459,28 @@
       case "val-sort": state.valSort = t.value; state.valLimit = 100; refreshValues(); break;
       default: break;
     }
+  });
+  document.addEventListener("submit", async (e) => {
+    if (e.target.id !== "unlock-form") return;
+    e.preventDefault();
+    const input = document.getElementById("pin"), msg = document.getElementById("pin-msg");
+    const pin = (input.value || "").trim();
+    if (!/^\d{4}$/.test(pin)) { msg.textContent = "Enter the 4-digit PIN."; input.focus(); return; }
+    msg.textContent = "Checking…";
+    try {
+      await unlock(pin);
+      const to = state.afterUnlock && TABS[state.afterUnlock] ? state.afterUnlock : "week";
+      state.afterUnlock = null;
+      if (location.hash === `#${to}`) route(); else location.hash = `#${to}`;
+    } catch {
+      msg.textContent = "That PIN didn't work. Try again.";
+      input.value = ""; input.focus();
+    }
+  });
+  document.getElementById("lockbtn")?.addEventListener("click", () => {
+    lockDevice();
+    location.hash = "#league";
+    route();
   });
   document.addEventListener("input", (e) => {
     if (e.target.id === "val-search") { state.valQuery = e.target.value; state.valLimit = 100; refreshValues(); }

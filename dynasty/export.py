@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import date
 from pathlib import Path
@@ -324,8 +325,11 @@ def run(store: Store, site_dir: Path) -> dict[str, int]:
     # this week: lineups, matchup odds, waiver targets (dynasty/weekly.py)
     wk = store.query("SELECT body FROM raw_snapshot WHERE endpoint='weekly'")
     _write(out, "weekly.json", json.loads(wk[0]["body"]) if wk and wk[0]["body"] else {"week": None})
+    # PIN lock: everything but the League and Past trades data goes into an encrypted vault
+    from . import vault
+    locked = vault.lock(out, os.environ.get("DYNASTY_PIN"))
     return {"teams": len(teams), "picks": len(picks), "activity": len(activity), "seasons": len(history),
-            "values": len(value_list)}
+            "values": len(value_list), "locked_files": locked["locked"]}
 
 
 def _table(store: Store, name: str) -> bool:

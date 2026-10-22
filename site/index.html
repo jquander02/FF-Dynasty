@@ -24,20 +24,23 @@
       <h1 id="league-name">Dynasty</h1>
       <p id="league-sub" class="sub">Loading your league…</p>
     </div>
+    <button id="lockbtn" class="icon-btn lock-btn" type="button" aria-label="Lock this device" title="Lock this device">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 11V8a5 5 0 0 1 10 0v3M5 11h14v10H5z"/></svg>
+    </button>
     <button id="refresh" class="icon-btn" type="button" aria-label="Reload data">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5"/></svg>
     </button>
     <nav class="tabs" aria-label="Sections">
       <a href="#league" data-tab="league">League</a>
-      <a href="#week" data-tab="week">Week</a>
-      <a href="#team" data-tab="team">Team</a>
-      <a href="#values" data-tab="values">Values</a>
-      <a href="#picks" data-tab="picks">Picks</a>
-      <a href="#plan" data-tab="plan">Plan</a>
-      <a href="#trade" data-tab="trade">Trade</a>
+      <a href="#week" data-tab="week" data-private>Week</a>
+      <a href="#team" data-tab="team" data-private>Team</a>
+      <a href="#values" data-tab="values" data-private>Values</a>
+      <a href="#picks" data-tab="picks" data-private>Picks</a>
+      <a href="#plan" data-tab="plan" data-private>Plan</a>
+      <a href="#trade" data-tab="trade" data-private>Trade</a>
       <a href="#trades" data-tab="trades">Past trades</a>
-      <a href="#owners" data-tab="owners">Managers</a>
-      <a href="#activity" data-tab="activity">Moves</a>
+      <a href="#owners" data-tab="owners" data-private>Managers</a>
+      <a href="#activity" data-tab="activity" data-private>Moves</a>
     </nav>
   </header>
 
@@ -46,18 +49,22 @@
   <nav class="tabbar" aria-label="Sections">
     <a href="#league" data-tab="league">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>League</a>
-    <a href="#week" data-tab="week">
+    <a href="#week" data-tab="week" data-private>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14v14H5zM5 10h14M9 3v5M15 3v5"/></svg>Week</a>
-    <a href="#team" data-tab="team">
+    <a href="#team" data-tab="team" data-private>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4l7 3v5c0 4-3 7-7 8-4-1-7-4-7-8V7z"/></svg>Team</a>
-    <a href="#values" data-tab="values">
+    <a href="#values" data-tab="values" data-private>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19V11M12 19V5M19 19v-6"/></svg>Values</a>
-    <a href="#picks" data-tab="picks">
+    <a href="#picks" data-tab="picks" data-private>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 9-8 9-8-9z"/></svg>Picks</a>
-    <a href="#plan" data-tab="plan">
+    <a href="#plan" data-tab="plan" data-private>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l4 4 10-10"/></svg>Plan</a>
-    <a href="#trade" data-tab="trade">
+    <a href="#trade" data-tab="trade" data-private>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h14l-3-3M20 16H6l3 3"/></svg>Trade</a>
+    <a href="#trades" data-tab="trades" data-lockedonly>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h14l-3-3M20 16H6l3 3"/></svg>Past trades</a>
+    <a href="#unlock" data-tab="unlock" data-lockedonly>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 11V8a5 5 0 0 1 10 0v3M5 11h14v10H5z"/></svg>Unlock</a>
   </nav>
 
   <div id="sheet" class="sheet" hidden>

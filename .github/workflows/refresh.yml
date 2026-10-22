@@ -62,6 +62,9 @@ jobs:
           ls -la data 2>/dev/null || echo "No cached database: this run starts fresh"
 
       - name: Refresh data
+        env:
+          # 4-digit PIN that unlocks everything but League and Past trades (repo secret DYNASTY_PIN)
+          DYNASTY_PIN: ${{ secrets.DYNASTY_PIN }}
         run: |
           MODE=full
           if [ "${{ github.event.schedule }}" = "7 */2 * * 0,1,4" ]; then MODE=quick; fi

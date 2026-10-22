@@ -79,7 +79,7 @@ a:hover { text-decoration: underline; }
 /* ---------- header ---------- */
 .top {
   position: sticky; top: 0; z-index: 10;
-  display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 12px;
+  display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 4px 8px;
   padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
   background: color-mix(in srgb, var(--page) 90%, transparent);
   backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
@@ -101,12 +101,13 @@ a:hover { text-decoration: underline; }
 /* ---------- bottom tab bar (phone) ---------- */
 .tabbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
-  display: grid; grid-template-columns: repeat(7, 1fr);
+  display: flex;
   height: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
   padding-bottom: env(safe-area-inset-bottom);
   background: var(--surface); border-top: 1px solid var(--line);
 }
 .tabbar a {
+  flex: 1 1 0; min-width: 0;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
   color: var(--muted); font-size: 11px; font-weight: 600; text-decoration: none;
 }
@@ -364,11 +365,12 @@ table.mini tr:last-child td { border-bottom: 0; }
 @media (min-width: 760px) {
   body { padding-bottom: 0; }
   .tabbar { display: none; }
-  .top { grid-template-columns: auto 1fr auto; padding: 12px 24px; }
+  .top { grid-template-columns: auto 1fr auto auto; padding: 12px 24px; }
+  #lockbtn { grid-column: 3; grid-row: 1; }
   .tabs { display: flex; gap: 2px; justify-self: center; grid-column: 2; grid-row: 1; }
   .tabs a { padding: 8px 12px; border-radius: 8px; color: var(--muted); font-weight: 600; font-size: 14px; text-decoration: none; }
   .tabs a.on { color: var(--ink); box-shadow: inset 0 -3px 0 var(--turf); border-radius: 0; }
-  #refresh { grid-column: 3; }
+  #refresh { grid-column: 4; grid-row: 1; }
   main { padding: 22px 24px 48px; }
   .cols { grid-template-columns: 1fr 1fr; align-items: start; }
   .tray { left: auto; right: 24px; bottom: 24px; width: 360px; }
@@ -520,3 +522,17 @@ button.past-row:focus-visible { outline: 2px solid var(--turf); outline-offset: 
 .seg.fill { display: flex; width: 100%; }
 .seg.fill button { flex: 1; padding: 9px 6px; font-size: 13.5px; }
 .tv-note { margin: -4px 0 0; }
+
+/* ---------- PIN lock ---------- */
+body:not(.has-vault) .lock-btn, body.locked .lock-btn { display: none; }
+body.locked [data-private] { display: none; }
+body:not(.locked) [data-lockedonly] { display: none; }
+.unlock { max-width: 320px; margin: 32px auto 0; text-align: center; }
+.unlock h2 { justify-content: center; }
+.unlock .note { margin-bottom: 16px; }
+.pin {
+  display: block; width: 100%; margin: 0 0 12px; padding: 12px; text-align: center;
+  font: 800 38px/1 var(--display); letter-spacing: 0.5em; text-indent: 0.5em;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 12px;
+}
+.pin-msg { min-height: 1.4em; color: var(--bad); }
