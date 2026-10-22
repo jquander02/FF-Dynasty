@@ -63,7 +63,7 @@ jobs:
 
       - name: Refresh data
         env:
-          # 4-digit PIN that unlocks everything but League and Past trades (repo secret DYNASTY_PIN)
+          # PIN that unlocks everything but League and Past trades (repo secret DYNASTY_PIN)
           DYNASTY_PIN: ${{ secrets.DYNASTY_PIN }}
         run: |
           MODE=full
@@ -122,12 +122,25 @@ jobs:
           path: data
           key: dbz-${{ github.run_id }}
 
+      # The repo is public, so anyone signed in to GitHub can download run artifacts: the backup is
+      # encrypted with the PIN (decrypt: DYNASTY_PIN=... python -m dynasty.vault decrypt-file IN OUT).
+      # No PIN, no backup (the Actions cache above still holds the database).
+      - name: Encrypt database backup
+        if: success()
+        env:
+          DYNASTY_PIN: ${{ secrets.DYNASTY_PIN }}
+        run: |
+          if [ -n "$DYNASTY_PIN" ]; then
+            mkdir -p backup
+            python -m dynasty.vault encrypt-file data/dynasty.db.gz backup/dynasty.db.gz.enc
+          fi
+
       - name: Back up database
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: dynasty-db
-          path: data/dynasty.db.gz
+          name: dynasty-db-encrypted
+          path: backup/dynasty.db.gz.enc
           retention-days: 7
           if-no-files-found: ignore
 

@@ -532,7 +532,7 @@ body:not(.locked) [data-lockedonly] { display: none; }
 .unlock .note { margin-bottom: 16px; }
 .pin {
   display: block; width: 100%; margin: 0 0 12px; padding: 12px; text-align: center;
-  font: 800 38px/1 var(--display); letter-spacing: 0.5em; text-indent: 0.5em;
+  font: 800 34px/1 var(--display); letter-spacing: 0.35em; text-indent: 0.35em;
   background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 12px;
 }
 .pin-msg { min-height: 1.4em; color: var(--bad); }

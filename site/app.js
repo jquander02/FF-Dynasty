@@ -151,7 +151,7 @@
       <form class="unlock" id="unlock-form" autocomplete="off">
         <h2>Enter your PIN</h2>
         <p class="note">${want ? `${esc(want)} is` : "Everything beyond League and Past trades is"} for the league owner. This device remembers the PIN once it's right.</p>
-        <input id="pin" class="pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" aria-label="4-digit PIN" placeholder="••••">
+        <input id="pin" class="pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" aria-label="PIN" placeholder="••••••">
         <button class="btn primary block" type="submit">Unlock</button>
         <p class="note pin-msg" id="pin-msg" role="alert"></p>
       </form>`;
@@ -1466,7 +1466,7 @@
     e.preventDefault();
     const input = document.getElementById("pin"), msg = document.getElementById("pin-msg");
     const pin = (input.value || "").trim();
-    if (!/^\d{4}$/.test(pin)) { msg.textContent = "Enter the 4-digit PIN."; input.focus(); return; }
+    if (!/^\d{4,8}$/.test(pin)) { msg.textContent = "Enter your PIN (digits only)."; input.focus(); return; }
     msg.textContent = "Checking…";
     try {
       await unlock(pin);
@@ -1478,8 +1478,10 @@
       input.value = ""; input.focus();
     }
   });
-  document.getElementById("lockbtn")?.addEventListener("click", () => {
+  document.getElementById("lockbtn")?.addEventListener("click", async () => {
     lockDevice();
+    await load();                    // back to the trimmed open files
+    header();
     location.hash = "#league";
     route();
   });

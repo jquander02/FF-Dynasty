@@ -211,13 +211,16 @@ Tables: `week_team`; the full report is `raw_snapshot['weekly']`, exported as `w
 
 ## PIN lock
 
-League (with History) and Past trades are open to anyone with the link. Everything else is
-encrypted with a 4-digit PIN: each refresh gzips those data files into `data/vault.json`, encrypted
+League (with History) and Past trades are open to anyone with the link; their open files carry only
+what those screens show (full team and league files ride in the vault). Everything else is
+encrypted with the PIN: each refresh gzips those data files into `data/vault.json`, encrypted
 with AES-256-GCM under a key derived from the PIN (PBKDF2-SHA256, 600,000 rounds; `dynasty/vault.py`).
 The app asks for the PIN once per device and keeps the derived key; the lock button in the header
 forgets it. Set the PIN as the repository secret `DYNASTY_PIN` (Settings → Secrets and variables →
-Actions). Without it, data is published unlocked and the refresh logs a warning. A 4-digit PIN keeps
-casual visitors out; someone who downloads the vault could brute-force it in an hour or two.
+Actions). Without it, data is published unlocked and the refresh logs a warning. The daily database
+backup (a run artifact, downloadable on a public repo) is encrypted with the same PIN; restore with
+`DYNASTY_PIN=... python -m dynasty.vault decrypt-file dynasty.db.gz.enc dynasty.db.gz`. Use 6+ digits:
+a 4-digit PIN could be brute-forced from the downloaded vault in under an hour.
 
 ## Where it lives
 
