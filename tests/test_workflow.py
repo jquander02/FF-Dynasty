@@ -20,6 +20,10 @@ class WorkflowTest(unittest.TestCase):
         idx = [self.steps.index(n) for n in order]
         self.assertEqual(idx, sorted(idx))
 
+    def test_cloudflare_deploy_after_snapshot(self):
+        self.assertIn("Deploy to Cloudflare Pages", self.steps)
+        self.assertLess(self.steps.index("Snapshot data to site-data branch"), self.steps.index("Deploy to Cloudflare Pages"))
+
     def test_cache_keys_match(self):
         text = WF.read_text()
         self.assertIn("restore-keys: dbz-", text)
