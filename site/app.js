@@ -11,7 +11,7 @@
   const SKILLPOS = ["QB", "RB", "WR", "TE"];
   // League and Past trades read only the public files; everything else is behind the PIN (vault.json).
   const PUBLIC_FILES = ["meta", "teams", "history", "trades"];
-  const PRIVATE_FILES = ["rosters", "picks", "activity", "values", "plan", "owners", "finder", "weekly"];
+  const PRIVATE_FILES = ["rosters", "picks", "activity", "values", "plan", "owners", "finder", "weekly", "schedule"];
   const OPEN_TABS = new Set(["league", "trades", "history", "unlock"]);
   let vault = null;            // the encrypted bundle, when the site is locked
   const VAULT_KEY = "vaultKey";
@@ -516,6 +516,75 @@
         `When Sleeper hasn't projected a player or a week yet, the app falls back to its own model: rest-of-season points per game, nudged by the betting-line total for his team's game. A backup quarterback gets 8% of his per-game number and a player with no games yet this season 5%, the rates seen in past seasons. A single week is mostly noise: a 12-point projection lands anywhere from about 3 to 21.`,
         `Win odds assume each player's score varies around his projection by the amount seen in past games. Points already scored count as final; games in progress count what's scored plus the unplayed share. Players whose games have started are locked, as on Sleeper.`,
         `Waiver adds: the points a player would add to this team's best lineup in each remaining week (playoff weeks weighted by playoff odds), plus his model value beyond this season. The bid pays only for his edge over the next-best free agent, since that one costs nothing: a share of remaining FAAB that grows with the edge, kept just above what the most interested rival should pay. Injury news updates each morning; scores update every two hours on game days.`,
+      ])}`;
+  }
+
+  // ---------------------------------------------------------------- Schedule
+  // Every team's regular season, week by week, and strength of schedule (dynasty/schedule.py).
+  const recStr = (r) => (r ? `${r[0]}–${r[1]}${r[2] ? `–${r[2]}` : ""}` : "–");
+  const signed1 = (x) => (x == null ? "–" : `${x > 0 ? "+" : x < 0 ? "−" : ""}${Math.abs(x).toFixed(1)}`);
+  function sosWord(rank, n) {
+    if (rank == null) return "–";
+    if (rank <= Math.ceil(n / 4)) return "Tough";
+    if (rank > n - Math.ceil(n / 4)) return "Easy";
+    return "Average";
+  }
+  function schedGame(g, rid, S) {
+    const opp = g.opp != null ? teamHTML(g.opp) : `<span class="muted">No game</span>`;
+    if (g.st === "final") {
+      const hard = g.hard ?? 0;
+      return `<div class="srow">
+        <span class="wk">Wk ${g.week}</span>
+        <span class="sopp">${opp}<span class="meta"><span>they scored ${f1(g.pa)}${Math.abs(hard) >= 10 ? `, ${f1(Math.abs(hard))} ${hard > 0 ? "above" : "below"} the week's average` : ""}</span></span></span>
+        <span class="sres ${g.res === "W" ? "up" : g.res === "L" ? "down" : "muted"}"><b>${g.res}</b><small>${f1(g.pf)}–${f1(g.pa)}</small></span></div>`;
+    }
+    if (g.st === "none") return `<div class="srow"><span class="wk">Wk ${g.week}</span><span class="sopp">${opp}</span><span></span></div>`;
+    const p = g.win ?? 0.5;
+    return `<div class="srow ${g.st === "live" ? "live" : ""}">
+      <span class="wk">Wk ${g.week}${g.st === "live" ? `<small>now</small>` : ""}</span>
+      <span class="sopp">${opp}<span class="meta"><span>projects ${f1(g.opp_proj)} a week${g.st === "live" && g.now ? `, you have ${f1(g.now)} so far` : ""}</span></span>
+        <span class="odds-bar" aria-hidden="true"><i style="width:${Math.round(p * 100)}%"></i></span></span>
+      <span class="sres"><b class="${p >= 0.5 ? "up" : "down"}">${pct(p)}</b><small>to win</small></span></div>`;
+  }
+  function renderSchedule() {
+    const S = D.schedule || {};
+    const T = S.teams || {};
+    if (!Object.keys(T).length) return `<div class="empty"><b>No schedule yet</b>Matchups show here once Sleeper publishes the season's schedule.</div>`;
+    const rid = focusTeam();
+    const t = T[rid] || {};
+    const games = (S.games || {})[rid] || [];
+    const n = Object.keys(T).length;
+    const left = games.filter((g) => g.st === "next" || g.st === "live");
+    const done = games.filter((g) => g.st === "final");
+    const finalWins = (x) => (x.record ? x.record[0] + 0.5 * (x.record[2] || 0) + (x.exp_wins_left || 0) : null);
+    const rows = Object.entries(T).map(([r, x]) => ({ rid: Number(r), ...x }));
+    const cols = [
+      { key: "team", label: "Team", value: (x) => teamOf(x.rid)?.team?.toLowerCase() || "",
+        html: (x) => `<button class="linkish tname" type="button" data-schteam="${x.rid}">${esc(teamOf(x.rid)?.team || `Team ${x.rid}`)}</button><span class="sub2"><span class="user">@${esc(teamOf(x.rid)?.owner || "")}</span></span>` },
+      { key: "rec", label: "W–L", num: 1, value: (x) => (x.record ? x.record[0] + 0.5 * x.record[2] : null), html: (x) => recStr(x.record) },
+      { key: "ap", label: "All-play", num: 1, wide: 1, value: (x) => x.allplay_pct, html: (x) => (x.allplay ? `${fmt(x.allplay[0])}–${fmt(x.allplay[1])}` : "–") },
+      { key: "luck", label: "Luck", num: 1, wide: 1, value: (x) => x.luck, html: (x) => `<span class="${signCls(x.luck)}">${signed1(x.luck)}</span>` },
+      { key: "sosp", label: "SOS past", num: 1, value: (x) => x.sos_played, html: (x) => `${signed1(x.sos_played)}${x.sos_played_rank ? `<small class="rk">${ordinal(x.sos_played_rank)}</small>` : ""}` },
+      { key: "sosl", label: "SOS left", num: 1, value: (x) => x.sos_left, html: (x) => `${signed1(x.sos_left)}${x.sos_left_rank ? `<small class="rk">${ordinal(x.sos_left_rank)}</small>` : ""}` },
+      { key: "xw", label: "Proj W", num: 1, value: finalWins, html: (x) => f1(finalWins(x)) },
+    ];
+    return `
+      ${teamPicker()}
+      ${board([
+        { v: recStr(t.record), l: t.allplay ? `All-play ${fmt(t.allplay[0])}–${fmt(t.allplay[1])}` : "Record", mark: true },
+        { v: signed1(t.luck), cls: `${signCls(t.luck)} long`, l: "Wins from schedule luck" },
+        { v: t.sos_played_rank ? ordinal(t.sos_played_rank) : "–", l: `Toughest schedule so far (${sosWord(t.sos_played_rank, n).toLowerCase()})` },
+        { v: t.sos_left_rank ? ordinal(t.sos_left_rank) : "–", l: `Toughest schedule left (${sosWord(t.sos_left_rank, n).toLowerCase()})` },
+      ])}
+      ${left.length ? `<p class="note">${plural(left.length, "game")} left in the regular season, ${f1(t.exp_wins_left)} expected wins: on pace to finish around ${f1(finalWins(t))} wins. Playoffs start week ${S.playoff_week_start}.</p>` : ""}
+      ${left.length ? `<h2>Still to play</h2><div class="group">${left.map((g) => schedGame(g, rid, S)).join("")}</div>` : ""}
+      ${done.length ? `<h2>Played<span class="count">${recStr(t.record)}</span></h2><div class="group">${done.slice().reverse().map((g) => schedGame(g, rid, S)).join("")}</div>` : ""}
+      <h2>Strength of schedule</h2>
+      <div class="sched-table">${sortableTable("sos", cols, rows, { key: "sosl", dir: -1 }, (x) => (x.rid === rid ? "me" : ""))}</div>
+      ${how("How strength of schedule works", [
+        `<b>SOS past</b>: the average weekly score of the teams each team has played, minus the league average${S.league_avg ? ` (${f1(S.league_avg)})` : ""}. Positive means tougher opponents. The rank next to it is 1st for the toughest.`,
+        `<b>SOS left</b>: the same for the games still to play, using each opponent's projected weekly score from the season simulation (this season's scoring blended with their best projected lineup; this week uses the Week tab's lineup projections). Win odds per game come from both teams' projections and how much scores swing week to week.`,
+        `<b>All-play</b>: the record a team would have if it played every other team every week. <b>Luck</b> is actual wins minus the wins that all-play rate would give over the same games: positive means the schedule has helped. <b>Proj W</b> (projected wins) is wins so far plus expected wins in the games left.`,
       ])}`;
   }
 
@@ -1335,8 +1404,8 @@
   }
 
   // ---------------------------------------------------------------- router
-  const TABS = { league: renderLeague, week: renderWeek, team: renderTeam, values: renderValues, picks: renderPicks, plan: renderPlan, trade: renderTrade, trades: renderPastTrades, owners: renderOwners, activity: renderActivity, history: renderHistory, unlock: renderUnlock };
-  const TITLES = { league: "League", week: "Week", team: "Team", values: "Values", picks: "Picks", plan: "Plan", trade: "Trade", trades: "Past trades", owners: "Managers", activity: "Moves", history: "History", unlock: "Unlock" };
+  const TABS = { league: renderLeague, week: renderWeek, schedule: renderSchedule, team: renderTeam, values: renderValues, picks: renderPicks, plan: renderPlan, trade: renderTrade, trades: renderPastTrades, owners: renderOwners, activity: renderActivity, history: renderHistory, unlock: renderUnlock };
+  const TITLES = { league: "League", week: "Week", schedule: "Schedule", team: "Team", values: "Values", picks: "Picks", plan: "Plan", trade: "Trade", trades: "Past trades", owners: "Managers", activity: "Moves", history: "History", unlock: "Unlock" };
   const FIRST_DIR = { rank: 1, team: 1, age: 1, champ: 1 };   // first tap: ascending for these, descending otherwise
   function route(keepScroll = false) {
     const y = window.scrollY;
@@ -1408,6 +1477,8 @@
     if (r) { setTeam(Number(r.dataset.roster)); }
     const tv = t.closest("[data-tv]");
     if (tv) { state.tradeView = tv.dataset.tv; store.set("tradeView", state.tradeView); rerender(); return; }
+    const sct = t.closest("[data-schteam]");
+    if (sct) { setTeam(Number(sct.dataset.schteam)); rerender(); window.scrollTo(0, 0); return; }
     const wkt = t.closest("[data-wkteam]");
     if (wkt) { setTeam(Number(wkt.dataset.wkteam)); state.weekView = "lineup"; rerender(); window.scrollTo(0, 0); return; }
     const wv = t.closest("[data-wv]");

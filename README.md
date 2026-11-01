@@ -23,6 +23,11 @@ that column (tap again to reverse); player and pick lists have a "Sort by" menu.
   lineup this season plus value beyond it, a FAAB bid for each, the rivals who'd want him,
   who to drop, the best kickers, defenses and fill-ins available this week, and the league's
   biggest winning bids
+- **Schedule:** any team's regular season week by week: results and scores so far (with how hot
+  each opponent was that week), and the games left with each opponent's projected weekly score and
+  win odds. Strength of schedule for every team: opponents' scoring so far vs the league average,
+  opponents' projected strength for the games left, all-play record, schedule luck (actual wins
+  minus all-play-rate wins) and projected final wins (`dynasty/schedule.py`)
 - **Team:** pick any team: roster with values, ages, injury and taxi tags, model-vs-market leans
 - **Values:** every player ranked by dynasty value; search, filter by position and team, sort
   by value, age, projection, points per game or 7-day change

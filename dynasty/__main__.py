@@ -11,7 +11,7 @@ import logging
 import sys
 import time
 
-from . import export, idmap, ingest_sleeper, market, model, nflverse, owners, picks, production, teams, trade, values, weekly
+from . import export, idmap, ingest_sleeper, market, model, nflverse, owners, picks, production, teams, trade, values, weekly, schedule
 from .config import load_config
 from .sleeper import SleeperClient
 from .store import Store
@@ -97,6 +97,11 @@ def main(argv: list[str] | None = None) -> int:
                     logging.getLogger("dynasty").warning("weekly build failed: %s", exc, exc_info=True)
                 pk = picks.build(store, cfg.value_weights)
                 print("Picks: " + ", ".join(f"{k} {v}" for k, v in pk.items()))
+                try:
+                    sch = schedule.build(store)
+                    print("Schedule: " + ", ".join(f"{k} {v}" for k, v in sch.items()))
+                except Exception as exc:  # noqa: BLE001 - never block the refresh
+                    logging.getLogger("dynasty").warning("schedule build failed: %s", exc, exc_info=True)
                 ow = owners.build(store)
                 print("Owners: " + ", ".join(f"{k} {v}" for k, v in ow.items()))
                 sug = trade.find_trades_all(store)
