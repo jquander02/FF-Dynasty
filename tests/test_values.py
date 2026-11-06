@@ -176,10 +176,11 @@ FC = [
     {"player": {"name": "2027 1st (Early)", "sleeperId": None, "position": "PICK"}, "value": 5000,
      "overallRank": 4, "positionRank": 1},
 ]
+_TODAY = __import__("datetime").date.today().isoformat()
 DP = ('"player","pos","team","age","draft_year","ecr_1qb","ecr_2qb","ecr_pos","value_1qb","value_2qb","scrape_date","fp_id"\n'
-      '"Christian McCaffrey","RB","SF",30.2,2017,10,12,2,7000,6000,"2026-08-28","15514"\n'
-      '"Unmapped Guy","WR","NYJ",25,2022,50,60,20,2000,1800,"2026-08-28","99999"\n'
-      '"2027 Early 1st","PICK",NA,NA,NA,NA,NA,NA,6000,5800,"2026-08-28",NA\n')
+      '"Christian McCaffrey","RB","SF",30.2,2017,10,12,2,7000,6000,"' + _TODAY + '","15514"\n'
+      '"Unmapped Guy","WR","NYJ",25,2022,50,60,20,2000,1800,"' + _TODAY + '","99999"\n'
+      '"2027 Early 1st","PICK",NA,NA,NA,NA,NA,NA,6000,5800,"' + _TODAY + '",NA\n')
 
 
 class ValuePipelineTest(unittest.TestCase):
@@ -251,8 +252,13 @@ class ValuePipelineTest(unittest.TestCase):
         self.assertEqual(sorted(r["overall_rank"] for r in v.values()), list(range(1, len(v) + 1)))
 
     def test_stale_source_dropped(self):
-        # the fixture's DynastyProcess scrape is from August: more than STALE_DAYS old
-        self.assertIn("dynastyprocess", self.values["stale_sources"])
+        self.assertIsNone(self.values["stale_sources"])
+        # an August scrape is more than STALE_DAYS old: DynastyProcess leaves the blend
+        self.store.conn.execute("""UPDATE market_value SET extra=REPLACE(extra, ?, '2026-08-28')
+                                   WHERE source='dynastyprocess'""", (_TODAY,))
+        self.store.commit()
+        out = values.build(self.store)
+        self.assertIn("dynastyprocess", out["stale_sources"])
         cmc = {r["player_id"]: r for r in self.q("SELECT * FROM player_value")}["4034"]
         parts = [(0.6, cmc["model_scaled"]), (0.3, cmc["fc_value"])]
         parts = [(a, b) for a, b in parts if b is not None]
