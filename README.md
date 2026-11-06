@@ -13,6 +13,18 @@ The app is neutral: nothing is tied to one manager. Every team name is shown wit
 manager's Sleeper username (e.g. *WR's 4 Sale @jquander*). Tap any table heading to sort by
 that column (tap again to reverse); player and pick lists have a "Sort by" menu.
 
+The app has five sections (bottom bar on phones, top menu on PC), each with a row of tabs:
+
+| Section | Tabs |
+|---|---|
+| League | Standings · Champions |
+| Week | Lineup · Matchups · Waivers · Schedule |
+| Team | Roster · Plan |
+| Trade | Trade lab · Past trades · Managers |
+| Values | Players · Draft picks · Moves |
+
+Without the PIN only League and Trade → Past trades show.
+
 - **League:** week, trade deadline, best record and most roster value; standings with playoff
   odds, value and each team's contention window, and a chart of every team's lineup strength
   now vs. the next two seasons
@@ -69,7 +81,7 @@ that column (tap again to reverse); player and pick lists have a "Sort by" menu.
   their picks are worth now vs the league's picks in the same rounds); waivers. Buttons open the
   trade lab with them, their past trades and their plan. A sortable table compares everyone.
 - **Moves, History:**
-  recent transactions; seasons and champions (linked from League; tabs on PC)
+  recent transactions (Values → Moves); seasons and champions (League → Champions)
 
 Works offline with the last data it loaded, follows your phone's light or dark mode, and the
 reload button at the top fetches the newest refresh. Each screen has a "How this works" note.

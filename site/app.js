@@ -278,7 +278,7 @@
       <h2>Standings</h2>
       ${sortableTable("standings", cols, list, { key: "rank", dir: 1 }, (t) => (t.roster_id === state.team ? "me" : ""))}
       ${windowChart(list)}
-      <div class="links"><a href="#trades" data-hist="all">Past trades</a>${state.locked ? "" : `<a href="#owners">Managers</a><a href="#activity">Recent moves</a>`}<a href="#history">Champions</a></div>
+
       ${how("How these numbers work", [
         `Tap a column heading to sort; tap it again to reverse. Playoff odds come from simulating the rest of the regular season 10,000 times on Sleeper's schedule. Value is the sum of a roster's player values.`,
         `Windows: each team's best possible lineup is projected for the rest of this season and the next two. <i>Dynasty power</i> is strong now and later, <i>Win now</i> is strong now only, <i>Rising</i> is stronger later, <i>Rebuild</i> is weak both ways.`,
@@ -499,18 +499,15 @@
         <div class="group">${W.bids.map((b) => `<div class="lrow"><span class="lname">${wkName(b.pid)}<span class="meta"><span>${teamHTML(b.rid)}</span><span>week ${b.week}</span></span></span>
           <span class="val"><b>$${fmt(b.amount)}</b></span></div>`).join("")}</div>` : ""}`;
   }
-  function renderWeek() {
+  function renderWeek(v = "lineup") {
     const W = wk();
     if (!W.week) return `<div class="empty"><b>No games this week</b>Lineup checks, matchup odds and waiver picks show up here during the season.</div>`;
     const rid = focusTeam();
-    const v = state.weekView;
-    const seg = [["lineup", "Lineup"], ["matchups", "Matchups"], ["waivers", "Waivers"]];
+    state.weekView = v;
     return `
       ${teamPicker()}
       <p class="note wk-head">${W.phase === "playoffs" ? "Playoffs, w" : "W"}eek ${W.week}. Projections updated ${ago(W.made)}.</p>
       ${scoreboard(rid)}
-      <div class="controls" style="margin-top:14px"><div class="seg" role="group" aria-label="View">
-        ${seg.map(([k, l]) => `<button data-wv="${k}" class="${v === k ? "on" : ""}" aria-pressed="${v === k}">${l}</button>`).join("")}</div></div>
       ${v === "matchups" ? weekMatchups(rid) : v === "waivers" ? weekWaivers(rid) : weekLineup(rid)}
       ${how("How this week's numbers work", [
         `Projections are Sleeper's own weekly projections (the ones in the Sleeper app), scored with this league's settings. They already account for matchups, depth charts and injury news; a player ruled out since is set to zero. Byes count zero. They refresh with every update: daily, and every two hours on game days.`,
@@ -1482,7 +1479,7 @@
   function renderActivity() {
     const items = D.activity || [];
     if (!items.length) return `<div class="empty"><b>No moves yet</b>Trades and waiver claims show up here after the next refresh.</div>`;
-    const label = { trade: "Trade", waiver: "Waiver claim", free_agent: "Free agent", commissioner: "Commissioner" };
+    const label = { trade: "Trade lab", waiver: "Waiver claim", free_agent: "Free agent", commissioner: "Commissioner" };
     const line = (m) => {
       if (m.kind === "add") return `<div class="move"><span class="k add">+</span>${esc(m.player)} <span class="muted">${esc(m.pos || "")} to ${nameHTML(m.to)}${m.from ? ` from ${nameHTML(m.from)}` : ""}${m.amount != null ? `, $${m.amount}` : ""}</span></div>`;
       if (m.kind === "drop") return `<div class="move"><span class="k drop">−</span>${esc(m.player)} <span class="muted">${esc(m.pos || "")} dropped by ${nameHTML(m.to)}</span></div>`;
@@ -1562,8 +1559,42 @@
   }
 
   // ---------------------------------------------------------------- router
-  const TABS = { league: renderLeague, week: renderWeek, schedule: renderSchedule, team: renderTeam, values: renderValues, picks: renderPicks, plan: renderPlan, trade: renderTrade, trades: renderPastTrades, owners: renderOwners, activity: renderActivity, history: renderHistory, unlock: renderUnlock };
-  const TITLES = { league: "League", week: "Week", schedule: "Schedule", team: "Team", values: "Values", picks: "Picks", plan: "Plan", trade: "Trade", trades: "Past trades", owners: "Managers", activity: "Moves", history: "History", unlock: "Unlock" };
+  // Five sections, each a row of tabs (the hash names the tab, so old links keep working).
+  const ICON = {
+    league: "M4 6h16M4 12h16M4 18h10",
+    week: "M5 6h14v14H5zM5 10h14M9 3v5M15 3v5",
+    team: "M12 4l7 3v5c0 4-3 7-7 8-4-1-7-4-7-8V7z",
+    trade: "M4 8h14l-3-3M20 16H6l3 3",
+    values: "M5 19V11M12 19V5M19 19v-6",
+  };
+  const SECTIONS = [
+    { key: "league", label: "League", tabs: [["league", "Standings"], ["history", "Champions"]] },
+    { key: "week", label: "Week", tabs: [["week", "Lineup"], ["matchups", "Matchups"], ["waivers", "Waivers"], ["schedule", "Schedule"]] },
+    { key: "team", label: "Team", tabs: [["team", "Roster"], ["plan", "Plan"]] },
+    { key: "trade", label: "Trade", tabs: [["trade", "Trade lab"], ["trades", "Past trades"], ["owners", "Managers"]] },
+    { key: "values", label: "Values", tabs: [["values", "Players"], ["picks", "Draft picks"], ["activity", "Moves"]] },
+  ];
+  const sectionOf = (tab) => SECTIONS.find((sec) => sec.tabs.some(([k]) => k === tab)) || SECTIONS[0];
+  const canSee = (tab) => !state.locked || OPEN_TABS.has(tab);
+  function navs() {
+    const items = SECTIONS.map((sec) => {
+      const first = sec.tabs.find(([k]) => canSee(k));
+      return first ? { ...sec, href: first[0] } : null;
+    }).filter(Boolean);
+    document.querySelector(".tabs").innerHTML = items.map((sec) =>
+      `<a href="#${sec.href}" data-section="${sec.key}">${sec.label}</a>`).join("");
+    document.querySelector(".tabbar").innerHTML = items.map((sec) =>
+      `<a href="#${sec.href}" data-section="${sec.key}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="${ICON[sec.key]}"/></svg>${sec.label}</a>`).join("");
+  }
+  function subnav(key) {
+    const sec = sectionOf(key);
+    const tabs = sec.tabs.filter(([k]) => canSee(k));
+    if (tabs.length < 2) return "";
+    return `<nav class="subnav" aria-label="${esc(sec.label)}">${tabs.map(([k, l]) =>
+      `<a href="#${k}" class="${k === key ? "on" : ""}" ${k === key ? 'aria-current="page"' : ""}>${l}</a>`).join("")}</nav>`;
+  }
+  const TABS = { league: renderLeague, week: () => renderWeek("lineup"), matchups: () => renderWeek("matchups"), waivers: () => renderWeek("waivers"), schedule: renderSchedule, team: renderTeam, values: renderValues, picks: renderPicks, plan: renderPlan, trade: renderTrade, trades: renderPastTrades, owners: renderOwners, activity: renderActivity, history: renderHistory, unlock: renderUnlock };
+  const TITLES = { league: "Standings", week: "Lineup", matchups: "Matchups", waivers: "Waivers", schedule: "Schedule", team: "Roster", values: "Player values", picks: "Draft picks", plan: "Plan", trade: "Trade", trades: "Past trades", owners: "Managers", activity: "Moves", history: "Champions", unlock: "Unlock" };
   const FIRST_DIR = { rank: 1, team: 1, age: 1, champ: 1 };   // first tap: ascending for these, descending otherwise
   function route(keepScroll = false) {
     const y = window.scrollY;
@@ -1571,10 +1602,12 @@
     let key = TABS[tab] ? tab : "league";
     if (state.locked && !OPEN_TABS.has(key)) { state.afterUnlock = key; key = "unlock"; }
     if (!state.locked && key === "unlock") key = "league";
-    view.innerHTML = D.meta ? TABS[key]() : `<div class="empty"><b>Couldn't load league data</b>Check your connection, then tap the reload button at the top.</div>`;
+    navs();
+    view.innerHTML = D.meta ? (key === "unlock" ? "" : subnav(key)) + TABS[key]() : `<div class="empty"><b>Couldn't load league data</b>Check your connection, then tap the reload button at the top.</div>`;
     document.body.classList.toggle("has-tray", key === "trade" && (state.give.size > 0 || state.get.size > 0));
-    document.querySelectorAll("[data-tab]").forEach((a) => {
-      const on = a.dataset.tab === key;
+    const sec = key === "unlock" ? null : sectionOf(key).key;
+    document.querySelectorAll("[data-section]").forEach((a) => {
+      const on = a.dataset.section === sec;
       a.classList.toggle("on", on);
       if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
     });
@@ -1638,7 +1671,7 @@
     const sct = t.closest("[data-schteam]");
     if (sct) { setTeam(Number(sct.dataset.schteam)); rerender(); window.scrollTo(0, 0); return; }
     const wkt = t.closest("[data-wkteam]");
-    if (wkt) { setTeam(Number(wkt.dataset.wkteam)); state.weekView = "lineup"; rerender(); window.scrollTo(0, 0); return; }
+    if (wkt) { setTeam(Number(wkt.dataset.wkteam)); location.hash = "#week"; route(); return; }
     const wv = t.closest("[data-wv]");
     if (wv) { state.weekView = wv.dataset.wv; store.set("weekView", state.weekView); rerender(); }
     const vp = t.closest("[data-vp]");
