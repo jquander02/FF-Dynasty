@@ -398,7 +398,7 @@
     const x = wp(pid);
     if (x.st === "final") return `<b>${f1(x.pts)}</b><small>scored</small>`;
     if (x.st === "live") return `<b>${f1(x.pts)}</b><small>so far, ${f1(x.proj)} exp.</small>`;
-    return `<b>${f1(x.proj)}</b><small>proj</small>`;
+    return `<b>${f1(x.proj)}</b><small>${x.range ? `${f1(x.range[0])}–${f1(x.range[1])}` : "proj"}</small>`;
   }
   function scoreboard(rid) {
     const T = wt(rid);
@@ -408,7 +408,7 @@
       <div class="side ${me ? "me" : ""}">
         <span class="who">${teamHTML(r)}</span>
         <b>${f1(t.mean)}</b>
-        <small>${t.now > 0 ? `${f1(t.now)} scored so far` : "projected"}</small>
+        <small>${t.now > 0 ? `${f1(t.now)} scored so far` : `likely ${Math.round(t.mean - 1.28 * t.sd)}–${Math.round(t.mean + 1.28 * t.sd)}`}</small>
       </div>`;
     if (!opp) return `<div class="score solo">${side(rid, T, true)}<p class="note">No opponent this week.</p></div>`;
     return `
@@ -514,6 +514,7 @@
       ${how("How this week's numbers work", [
         `Projections are Sleeper's own weekly projections (the ones in the Sleeper app), scored with this league's settings. They already account for matchups, depth charts and injury news; a player ruled out since is set to zero. Byes count zero. They refresh with every update: daily, and every two hours on game days.`,
         `When Sleeper hasn't projected a player or a week yet, the app falls back to its own model: rest-of-season points per game, nudged by the betting-line total for his team's game. A backup quarterback gets 8% of his per-game number and a player with no games yet this season 5%, the rates seen in past seasons. A single week is mostly noise: a 12-point projection lands anywhere from about 3 to 21.`,
+        `Under each projection is the player's likely range: in past seasons a player scored below the first number in about 1 game in 10 and above the second in about 1 in 10. A player who might not play (questionable or worse) has a floor of 0. When you're favored, a high floor matters more; as an underdog, a high ceiling does. Team scores show the range most weeks fall into.`,
         `Win odds assume each player's score varies around his projection by the amount seen in past games. Points already scored count as final; games in progress count what's scored plus the unplayed share. Players whose games have started are locked, as on Sleeper.`,
         `Waiver adds: the points a player would add to this team's best lineup in each remaining week (playoff weeks weighted by playoff odds), plus his model value beyond this season. The bid pays only for his edge over the next-best free agent, since that one costs nothing: a share of remaining FAAB that grows with the edge, kept just above what the most interested rival should pay. Injury news updates each morning; scores update every two hours on game days.`,
       ])}`;

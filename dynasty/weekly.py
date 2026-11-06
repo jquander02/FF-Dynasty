@@ -47,6 +47,11 @@ LONG_OUT = {"IR", "PUP", "Sus", "NA"}
 # Model fallback (weeks or players Sleeper doesn't project). Measured on 2019-2025 player-weeks:
 BACKUP_QB_NOW = 0.08      # backup QBs scored 8% of their per-game projection (played 12% of weeks)
 BACKUP_QB_LATER = 0.12    # ...more over later weeks: injuries and benchings
+# 10th / 90th percentile of a player's score in a game he plays, as a + b * projection. Fit by
+# position on 2019-22 player-weeks; on 2023-25: 7-10% of games fell below the floor, 9-12% above
+# the ceiling. Kickers and defenses use the normal spread (SD_FIT).
+RANGE_FIT = {"QB": ((-7.2, 0.858), (11.91, 0.908)), "RB": ((-2.76, 0.496), (4.49, 1.407)),
+             "WR": ((-2.33, 0.45), (4.48, 1.54)), "TE": ((-1.76, 0.39), (2.89, 1.579))}
 SLEEPER_FULL = 150        # skill players in a week's Sleeper projections for the list to count as complete
 NO_GAMES_YET = 0.05       # RB/WR/TE with no games by week 3 played 5% of the time
 GAME_MINUTES = 190        # kickoff to final whistle, typical
@@ -227,6 +232,7 @@ class Projector:
         self.kicker = self._kickers(store, season)
         self.qb_starter = self._qb_starters(store, season)
         # Sleeper's own projections (league-scored), the first choice for any week they cover
+        self.cond = {}      # (pid, week) -> (points if he plays, chance he plays)
         self.sleeper = {}
         if _has(store, "sleeper_projection"):
             for r in store.query("SELECT week, player_id, pts FROM sleeper_projection WHERE season=?", (str(season),)):
@@ -360,6 +366,27 @@ class Projector:
             return share * 0.6 * role
         return share * role
 
+    def range(self, pid, w) -> tuple[float, float] | None:
+        """(floor, ceiling): 10th and 90th percentile of his score this week. A player who may not
+        play (under 90%) has a floor of 0."""
+        if (pid, w) not in self.cond:
+            self.dist(pid, w)
+        c = self.cond.get((pid, w))
+        if not c or c[0] <= 0:
+            return None
+        m, p = c
+        pos = self.pos(pid)
+        if pos in RANGE_FIT:
+            (fa, fb), (ca, cb) = RANGE_FIT[pos]
+            lo, hi = max(0.0, fa + fb * m), ca + cb * m
+        else:
+            a, k = SD_FIT.get(pos, (5.0, 0.3))
+            sd = a + k * m
+            lo, hi = max(0.0, m - 1.2816 * sd), m + 1.2816 * sd
+        if p < 0.9:
+            lo = 0.0
+        return round(lo, 1), round(hi, 1)
+
     def source(self, pid, w) -> str:
         return "sleeper" if (w, pid) in self.sleeper else "model"
 
@@ -382,6 +409,8 @@ class Projector:
                 return 0.0, 0.0
             m = self.sleeper[(w, pid)]
             sd = a + k * m
+            p = 0.8 if inj == "Questionable" else 0.2 if inj == "Doubtful" else 1.0
+            self.cond[(pid, w)] = (m / p if p else m, p)       # Sleeper already discounts injury risk
             return m, sd * sd
         if w in self.sleeper_weeks and pos in ("QB", "RB", "WR", "TE"):
             # Sleeper covered this week but not him: not expected to play
@@ -399,6 +428,7 @@ class Projector:
         m = b * fac
         sd = a + k * m
         p = self.play_prob(pid, w)
+        self.cond[(pid, w)] = (m, p)
         mean = p * m
         return mean, max(0.0, p * (sd * sd + m * m) - mean * mean)
 
@@ -762,6 +792,7 @@ def build(store: Store, now: datetime | None = None) -> dict:
             "opp": (("" if g["home"] else "@") + g["opp"]) if g else None,
             "kick": g["kick"].isoformat() if g and g.get("kick") else None,
             "st": stt, "proj": round(m, 1), "sd": round(math.sqrt(v), 1),
+            "range": P.range(pid, week) if stt not in ("final", "bye", "none") else None,
             "pts": round(s, 2) if stt in ("live", "final") else None,
             "ppg": round(P.base(pid), 1) if P.base(pid) else None,
             "backup": True if P.backup_qb(pid) and P.source(pid, week) == "model" else None,

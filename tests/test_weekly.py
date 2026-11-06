@@ -178,6 +178,14 @@ class WeeklyBuildTest(unittest.TestCase):
         self.assertAlmostEqual(projection_points({"rec": 5, "rec_yd": 60, "rec_td": 0.5}, sc, "WR"), 14.0)
         self.assertEqual(projection_points({"pts_ppr": 8.2, "sack": 2}, sc, "DEF"), 8.2)
 
+    def test_floor_and_ceiling(self):
+        P = self.r["players"]
+        lo, hi = P["q1"]["range"]
+        self.assertLess(lo, P["q1"]["proj"])
+        self.assertGreater(hi, P["q1"]["proj"])
+        self.assertIsNone(P["w1"]["range"])          # game over: no range
+        self.assertIsNone(P["r2"]["range"])          # bye
+
     def test_backup_qb_barely_projects(self):
         P = self.r["players"]
         self.assertIn("q3", P)                         # listed among free agents only if worth it...
