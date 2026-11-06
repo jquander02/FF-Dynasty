@@ -89,7 +89,8 @@ reload button at the top fetches the newest refresh. Each screen has a "How this
 3. **Market.** FantasyCalc (12-team, 1QB, full PPR dynasty, from real trades) and
    DynastyProcess values, stored daily.
 4. **Blend.** All three are put on FantasyCalc's value scale by rank and blended
-   60% model / 30% FantasyCalc / 10% DynastyProcess. Change the mix in `config.yaml`
+   60% model / 30% FantasyCalc / 10% DynastyProcess. Change the mix in `config.yaml` A market source whose data is more than 21 days old
+   (our last pull, or DynastyProcess's FantasyPros scrape date) drops out of the blend until it's fresh.
    under `value_weights`.
 
 **Backtest.** `dynasty/backtest.py` reruns the model as of each offseason from 2015 to 2024 using
