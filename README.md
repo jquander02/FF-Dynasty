@@ -208,7 +208,19 @@ Tables: `owner_profile`, `trade_review`, `trade_suggestion`.
   one is free: bid = remaining FAAB × edge ÷ (edge + 150), capped at 75%, held to just above
   the most interested rival's worth when that's lower. Drop = the active player whose loss
   costs least.
-- **Season sim:** this week's projected scores replace the flat team average for this week.
+- **Season sim:** this week's projected scores replace the flat team average for this week. Later
+  weeks and the playoffs are simulated player by player (`dynasty/playersim.py`, after ffsimulator):
+  each week every player plays or not (byes, injuries, games-share), each team starts its best
+  available players, and each starter scores his projection plus noise. The trade lab replays the
+  same simulation in the browser with a trade applied (`sim.json`) and shows the change in each
+  team's playoff and title odds; a player's random draws depend on his id, so only the trade differs.
+- **Floor / ceiling:** 10th and 90th percentile of a player's score if he plays (`RANGE_FIT`, fit by
+  position on 2019-22; 2023-25: 7-10% below the floor, 9-12% above the ceiling); 0 floor when he
+  may not play.
+- **Projection blend test** (2026-11): Sleeper alone missed by 5.27 points per player-week against
+  the model's 5.43 and FantasyPros consensus's 5.41 (2020-24, ~17k player-weeks); blends fit on
+  2020-22 were 1.2% worse than Sleeper on 2023-24, so the Week tab uses Sleeper alone. Sleeper's past
+  projections are kept on the site-data branch (`backtest/sleeper-proj-history.json.gz`).
 
 Tables: `week_team`; the full report is `raw_snapshot['weekly']`, exported as `weekly.json`.
 

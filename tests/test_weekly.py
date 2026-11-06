@@ -186,6 +186,24 @@ class WeeklyBuildTest(unittest.TestCase):
         self.assertIsNone(P["w1"]["range"])          # game over: no range
         self.assertIsNone(P["r2"]["range"])          # bye
 
+    def test_player_simulation(self):
+        import numpy as np
+        from dynasty import playersim
+        data = playersim.load(self.s)
+        self.assertEqual(data["weeks"][0], 7)                      # weeks after this one
+        self.assertEqual(data["weeks"][-1], 15)                    # through the playoffs (2 teams: 1 round)
+        sc = playersim.all_scores(data, sims=2000)
+        a, b = sc[1][7], sc[2][7]
+        self.assertEqual(len(a), 2000)
+        # team 1's best lineup projects well above a full-strength team 2? compare to the sum of starters
+        self.assertGreater(a.mean(), 40)
+        self.assertTrue((a >= 0).all())
+        # an injured-for-the-season player adds nothing; giving team 2 team 1's QB raises team 2's scores
+        moved = dict(data, roster={1: [p for p in data["roster"][1] if p != "q1"], 2: data["roster"][2] + ["q1"]})
+        after = playersim.all_scores(moved, sims=2000)
+        self.assertGreater(after[2][7].mean(), sc[2][7].mean())
+        self.assertLess(after[1][7].mean(), sc[1][7].mean())
+
     def test_backup_qb_barely_projects(self):
         P = self.r["players"]
         self.assertIn("q3", P)                         # listed among free agents only if worth it...

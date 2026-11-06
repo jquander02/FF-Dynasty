@@ -458,6 +458,7 @@ def build(store: Store, now: datetime | None = None) -> dict:
     if not in_season:
         store.snapshot("weekly", {"week": None})
         store.conn.execute("DROP TABLE IF EXISTS week_team")
+        store.conn.execute("DROP TABLE IF EXISTS sim_player_week")
         return {"week": None}
 
     roster_positions = json.loads(lg["roster_positions"] or "[]")
@@ -584,6 +585,20 @@ def build(store: Store, now: datetime | None = None) -> dict:
         pairs.append([a, b])
     store.write_frame("week_team", [{"roster_id": rid, "week": week, "mean": t["mean"], "sd": t["sd"],
                                      "now": t["now"]} for rid, t in team_out.items()])
+
+    # ---- player-week projections for the rest of the season (dynasty/playersim.py): points if he
+    # plays and the chance he plays, for every week after this one through the playoffs
+    sim_rows = []
+    for rid, pids in roster.items():
+        for pid in pids:
+            if slot_of.get(pid) not in ("starter", "bench", "ir") or P.pos(pid) is None:
+                continue
+            for w in range(week + 1, playoff_weeks[-1] + 1):
+                P.dist(pid, w)
+                m, pp = P.cond.get((pid, w), (0.0, 0.0))
+                sim_rows.append({"roster_id": rid, "player_id": pid, "pos": P.pos(pid), "week": w,
+                                 "m": round(m, 2), "p": round(pp, 3)})
+    store.write_frame("sim_player_week", sim_rows)
 
     # ---- waivers
     rostered = {p for pids in roster.values() for p in pids}

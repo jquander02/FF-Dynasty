@@ -74,20 +74,28 @@ def kdef_weekly(store: Store, league_id: str) -> float:
     return 15.0
 
 
-def playoff_places(seeds: list, mean: dict, sd: float, rng: random.Random) -> list:
+def playoff_places(seeds: list, mean: dict, sd: float, rng: random.Random, score=None) -> list:
     """Single-elimination playoff (top seeds get byes). Returns teams in finishing order 1..k.
-    Supports 4, 6 or 8 teams; places 5+ go to first-round losers by seed (6-team: 5th-place game)."""
+    Supports 4, 6 or 8 teams; places 5+ go to first-round losers by seed (6-team: 5th-place game).
+    score(team, round) -> a simulated score for that playoff round, or None to draw from mean/sd."""
     k = len(seeds)
+    rnd_of = {"r": 0}
+
+    def pts(t):
+        x = score(t, rnd_of["r"]) if score else None
+        return x if x is not None else rng.gauss(mean[t], sd)
 
     def game(a, b):
-        return (a, b) if rng.gauss(mean[a], sd) >= rng.gauss(mean[b], sd) else (b, a)
+        return (a, b) if pts(a) >= pts(b) else (b, a)
 
     if k == 6:
         w1, l1 = game(seeds[2], seeds[5])
         w2, l2 = game(seeds[3], seeds[4])
         low, high = sorted([w1, w2], key=seeds.index)[::-1], None
+        rnd_of["r"] = 1
         sw1, sl1 = game(seeds[0], low[0])
         sw2, sl2 = game(seeds[1], low[1])
+        rnd_of["r"] = 2
         champ, runner = game(sw1, sw2)
         third, fourth = game(sl1, sl2)
         fifth, sixth = game(l1, l2)
@@ -97,12 +105,14 @@ def playoff_places(seeds: list, mean: dict, sd: float, rng: random.Random) -> li
         losers_by_round = []
         while len(rnd) > 2:
             nxt, lost = [], []
+            rnd_of["r"] = len(losers_by_round)
             for i in range(len(rnd) // 2):
                 w, l = game(rnd[i], rnd[-1 - i])
                 nxt.append(w)
                 lost.append(l)
             losers_by_round.append(sorted(lost, key=seeds.index))
             rnd = sorted(nxt, key=seeds.index)
+        rnd_of["r"] = len(losers_by_round)
         champ, runner = game(rnd[0], rnd[1])
         semis = losers_by_round[-1]
         third, fourth = game(semis[0], semis[1])
@@ -113,17 +123,22 @@ def playoff_places(seeds: list, mean: dict, sd: float, rng: random.Random) -> li
 
 def simulate_season(teams: dict, schedule: dict, weeks: list[int], sd: float, playoff_teams: int,
                     sims: int = SIMS, seed: int = 7, rule: str = "reverse_standings",
-                    fixed: dict | None = None) -> dict:
+                    fixed: dict | None = None, scores: dict | None = None,
+                    playoff_weeks: list | None = None) -> dict:
     """teams: rid -> {wins, ties, pf, mean}. schedule: week -> [(a, b), ...].
     rule: 'reverse_standings' (worst record picks 1st) or 'playoff_finish' (non-playoff teams by
     reverse record, then playoff teams by finish, champion last).
     fixed: week -> {rid: (mean, sd)} for a week already projected lineup by lineup (this week).
+    scores: rid -> {week: array of simulated scores, one per sim} from the player-by-player
+    simulation (dynasty/playersim.py); used for those weeks and the playoff rounds (playoff_weeks).
     Returns rid -> {slots (draft slot counts), playoffs, titles, wins (total over sims)}."""
     rng = random.Random(seed)
     rids = list(teams)
     n = len(rids)
     out = {rid: {"slots": [0] * (n + 1), "playoffs": 0, "titles": 0, "wins": 0.0} for rid in rids}
-    for _ in range(sims):
+    if scores:
+        sims = min(len(next(iter(wk.values()))) for wk in scores.values() if wk) if any(scores.values()) else sims
+    for it in range(sims):
         wins = {rid: teams[rid]["wins"] + 0.5 * teams[rid]["ties"] for rid in rids}
         pf = {rid: teams[rid]["pf"] for rid in rids}
         for w in weeks:
@@ -138,6 +153,11 @@ def simulate_season(teams: dict, schedule: dict, weeks: list[int], sd: float, pl
                 mb, sdb = fx.get(b, (teams[b]["mean"], sd))
                 sa = rng.gauss(ma, sda)
                 sb = rng.gauss(mb, sdb)
+                if scores and w not in fx:
+                    if w in scores.get(a, {}):
+                        sa = float(scores[a][w][it])
+                    if w in scores.get(b, {}):
+                        sb = float(scores[b][w][it])
                 pf[a] += sa
                 pf[b] += sb
                 if sa > sb:
@@ -147,7 +167,11 @@ def simulate_season(teams: dict, schedule: dict, weeks: list[int], sd: float, pl
         standing = sorted(rids, key=lambda r: (wins[r], pf[r]), reverse=True)
         means = {r: teams[r]["mean"] for r in rids}
         if 0 < playoff_teams < n:
-            places = playoff_places(standing[:playoff_teams], means, sd, rng)
+            def po_score(t, r, it=it):
+                wk = (playoff_weeks or [])[r] if playoff_weeks and r < len(playoff_weeks) else None
+                arr = (scores or {}).get(t, {}).get(wk) if wk is not None else None
+                return float(arr[it]) if arr is not None else None
+            places = playoff_places(standing[:playoff_teams], means, sd, rng, po_score if scores else None)
             out[places[0]]["titles"] += 1
         else:
             places = standing
@@ -356,7 +380,21 @@ def build(store: Store, weights: dict | None = None) -> dict:
         for r in store.query("SELECT roster_id, week, mean, sd FROM week_team"):
             if r["week"] in weeks and r["mean"] is not None:
                 fixed[r["week"]][r["roster_id"]] = (r["mean"], max(r["sd"] or 0.0, 0.5))
-    sim = simulate_season(teams, schedule, weeks, sd, playoff_teams, rule=rule, fixed=fixed) if teams else {}
+    # player-by-player simulation for the weeks after this one, when in season (dynasty/playersim.py)
+    scores, po_weeks, how = None, None, "team"
+    try:
+        from . import playersim
+        data = playersim.load(store)
+        if data:
+            scores = playersim.all_scores(data)
+            po_start = last_reg + 1
+            po_weeks = [w for w in data["weeks"] if w >= po_start]
+            how = "player"
+    except Exception as exc:  # noqa: BLE001 - fall back to the team-level simulation
+        log.warning("player simulation failed: %s", exc)
+        scores = None
+    sim = simulate_season(teams, schedule, weeks, sd, playoff_teams, rule=rule, fixed=fixed,
+                          scores=scores, playoff_weeks=po_weeks) if teams else {}
 
     sims = sum(sim[next(iter(sim))]["slots"]) if sim else 1
     store.write_frame("season_sim", [
@@ -455,6 +493,7 @@ def build(store: Store, weights: dict | None = None) -> dict:
     store.commit()
     return {
         "simulated_weeks": len(weeks), "schedule_weeks": len(schedule), "team_sd": round(sd, 1),
+        "sim": how,
         "kdef_weekly": round(kdef, 1), "pick_curve": bool(curve), "picks_valued": len(rows),
         "market_pick_rows": sum(len(v) for v in mk.values()),
         "draft_rule": check,

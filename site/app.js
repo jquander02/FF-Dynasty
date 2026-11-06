@@ -11,7 +11,7 @@
   const SKILLPOS = ["QB", "RB", "WR", "TE"];
   // League and Past trades read only the public files; everything else is behind the PIN (vault.json).
   const PUBLIC_FILES = ["meta", "teams", "history", "trades"];
-  const PRIVATE_FILES = ["rosters", "picks", "activity", "values", "plan", "owners", "finder", "weekly", "schedule"];
+  const PRIVATE_FILES = ["rosters", "picks", "activity", "values", "plan", "owners", "finder", "weekly", "schedule", "sim"];
   const OPEN_TABS = new Set(["league", "trades", "history", "unlock"]);
   let vault = null;            // the encrypted bundle, when the site is locked
   const VAULT_KEY = "vaultKey";
@@ -102,6 +102,7 @@
   }
   function index() {
     judged.clear();
+    if (typeof simCache !== "undefined") { simCache.clear(); simBase = null; tradeOdds.key = null; }
     byId = {};
     for (const p of D.values || []) byId[p.id] = { ...p };
     for (const [rid, list] of Object.entries(D.rosters || {})) {
@@ -849,6 +850,150 @@
       picks.map((p) => row(pickKey(p), `<span class="dot PK">PK</span>${p.season} round ${p.round}`,
         `<span>${p.traded ? `from ${esc(teamOf(p.from)?.team || "?")}` : "own"}</span>${p.exp_slot ? `<span>about ${slotLabel(p.round, p.exp_slot)}</span>` : ""}`, p.value || 0)).join("");
   }
+  // ---------------------------------------------------------------- Season simulation (trade lab)
+  // Same model as dynasty/playersim.py: each simulated week every player plays or not, each team
+  // starts its best available players, and each starter scores his projection plus noise. A player's
+  // random draws depend only on his id and the week, so moving him in a trade changes who starts him,
+  // not his luck: before/after odds differ only because of the trade.
+  const SIM_N = 2000;
+  const FLEX_OK = { FLEX: ["RB", "WR", "TE"], SUPER_FLEX: ["QB", "RB", "WR", "TE"], REC_FLEX: ["WR", "TE"], WRRB_FLEX: ["RB", "WR"] };
+  function hashStr(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+  function rng32(seed) {
+    let a = seed >>> 0;
+    return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  }
+  function gaussFrom(r) { let u = 0; while (u === 0) u = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * r()); }
+  const simCache = new Map();
+  function simDraws(pid, j) {          // this player's availability and score in week j, every sim
+    const key = `${pid}|${j}`;
+    if (simCache.has(key)) return simCache.get(key);
+    const S = D.sim, P = S.players[pid];
+    const m = P.m[j], p = P.p[j], [a, k] = S.sd_fit[P.pos] || [5, 0.3], sd = a + k * m;
+    const r = rng32(hashStr(key));
+    const out = new Float32Array(SIM_N);
+    for (let i = 0; i < SIM_N; i++) {
+      const plays = r() < p;
+      const x = Math.max(0, m + sd * gaussFrom(r));
+      out[i] = plays ? x : -1;
+    }
+    if (simCache.size > 6000) simCache.clear();
+    simCache.set(key, out);
+    return out;
+  }
+  function slotOrderJS(slots) {
+    return slots.map((s, i) => i).sort((x, y) => {
+      const fx = FLEX_OK[slots[x]] ? FLEX_OK[slots[x]].length : 0, fy = FLEX_OK[slots[y]] ? FLEX_OK[slots[y]].length : 0;
+      return (fx > 0) - (fy > 0) || fx - fy || x - y;
+    });
+  }
+  function teamSimScores(pids) {       // [weeks][SIM_N] simulated team scores
+    const S = D.sim, slots = S.slots, order = slotOrderJS(slots);
+    const ids = pids.filter((p) => S.players[p]);
+    return S.weeks.map((w, j) => {
+      const ranked = ids.slice().sort((x, y) => S.players[y].m[j] - S.players[x].m[j]);
+      const draws = ranked.map((p) => simDraws(p, j));
+      const pos = ranked.map((p) => S.players[p].pos);
+      const tot = new Float32Array(SIM_N);
+      const used = new Uint8Array(ranked.length);
+      for (let i = 0; i < SIM_N; i++) {
+        used.fill(0);
+        let t = 0;
+        for (const si of order) {
+          const ok = FLEX_OK[slots[si]] || [slots[si]];
+          for (let q = 0; q < ranked.length; q++) {
+            if (!used[q] && draws[q][i] >= 0 && ok.includes(pos[q])) { used[q] = 1; t += draws[q][i]; break; }
+          }
+        }
+        tot[i] = t;
+      }
+      return tot;
+    });
+  }
+  function bracketJS(seeds, score) {   // finishing order; score(team, round)
+    const game = (a, b, r) => (score(a, r) >= score(b, r) ? [a, b] : [b, a]);
+    const idx = (t) => seeds.indexOf(t);
+    if (seeds.length === 6) {
+      const [w1, l1] = game(seeds[2], seeds[5], 0), [w2, l2] = game(seeds[3], seeds[4], 0);
+      const low = [w1, w2].sort((x, y) => idx(y) - idx(x));
+      const [sw1, sl1] = game(seeds[0], low[0], 1), [sw2, sl2] = game(seeds[1], low[1], 1);
+      const [c, ru] = game(sw1, sw2, 2), [th, fo] = game(sl1, sl2, 2), [fi, si] = game(l1, l2, 2);
+      return [c, ru, th, fo, fi, si];
+    }
+    let rnd = seeds.slice(), r = 0;
+    while (rnd.length > 2) {
+      const nxt = [];
+      for (let i = 0; i < rnd.length / 2; i++) nxt.push(game(rnd[i], rnd[rnd.length - 1 - i], r)[0]);
+      rnd = nxt.sort((x, y) => idx(x) - idx(y)); r++;
+    }
+    return rnd.length === 2 ? game(rnd[0], rnd[1], r) : rnd;
+  }
+  let simBase = null;
+  function seasonOdds(moved) {          // moved: {pid: newRid}; returns rid -> {playoffs, title}
+    const S = D.sim;
+    if (!simBase) {
+      simBase = {};
+      for (const [rid, pids] of Object.entries(S.roster)) simBase[rid] = teamSimScores(pids);
+    }
+    const scores = { ...simBase };
+    const touched = new Set(Object.values(moved || {}).map(String));
+    for (const [pid, to] of Object.entries(moved || {})) {
+      for (const [rid, pids] of Object.entries(S.roster)) if (pids.includes(pid)) touched.add(String(rid));
+    }
+    for (const rid of touched) {
+      const pids = (S.roster[rid] || []).filter((p) => !(p in (moved || {})))
+        .concat(Object.entries(moved || {}).filter(([, to]) => String(to) === rid).map(([p]) => p));
+      scores[rid] = teamSimScores(pids);
+    }
+    const rids = Object.keys(S.standings);
+    const wi = new Map(S.weeks.map((w, j) => [w, j]));
+    const regWeeks = Object.keys(S.schedule).map(Number).filter((w) => w >= S.week && w <= S.last_regular_week).sort((a, b) => a - b);
+    const poWeeks = S.weeks.filter((w) => w > S.last_regular_week);
+    const out = Object.fromEntries(rids.map((r) => [r, { playoffs: 0, title: 0 }]));
+    const r = rng32(12345);
+    const fallback = (rid) => (S.means[rid] ?? 110) + S.team_sd * gaussFrom(r);
+    for (let i = 0; i < SIM_N; i++) {
+      const wins = {}, pf = {};
+      for (const rid of rids) { wins[rid] = S.standings[rid][0] + 0.5 * S.standings[rid][1]; pf[rid] = S.standings[rid][2]; }
+      for (const w of regWeeks) {
+        for (const [a, b] of S.schedule[w]) {
+          const pts = (rid) => {
+            const tw = S.this_week[rid];
+            if (tw && tw[0] === w) return tw[1] + tw[2] * gaussFrom(r);
+            const j = wi.get(w);
+            return j != null && scores[rid] ? scores[rid][j][i] : fallback(rid);
+          };
+          const sa = pts(String(a)), sb = pts(String(b));
+          pf[a] += sa; pf[b] += sb;
+          if (sa > sb) wins[a] += 1; else if (sb > sa) wins[b] += 1;
+        }
+      }
+      const standing = rids.slice().sort((x, y) => wins[y] - wins[x] || pf[y] - pf[x]);
+      const seeds = standing.slice(0, S.playoff_teams);
+      seeds.forEach((t) => out[t].playoffs++);
+      const order = bracketJS(seeds, (t, rr) => {
+        const w = poWeeks[rr], j = w != null ? wi.get(w) : null;
+        return j != null && scores[t] ? scores[t][j][i] : fallback(t);
+      });
+      out[order[0]].title++;
+    }
+    for (const rid of rids) { out[rid].playoffs /= SIM_N; out[rid].title /= SIM_N; }
+    return out;
+  }
+  function tradeOdds(A, B) {
+    const S = D.sim;
+    if (!S || !S.weeks?.length || !(S.week <= S.last_regular_week)) return null;
+    const moved = {};
+    for (const k of state.give) if (S.players[k]) moved[k] = B;
+    for (const k of state.get) if (S.players[k]) moved[k] = A;
+    if (!Object.keys(moved).length) return null;
+    const key = JSON.stringify(moved);
+    if (tradeOdds.key === key) return tradeOdds.val;
+    const before = seasonOdds({}), after = seasonOdds(moved);
+    tradeOdds.key = key;
+    tradeOdds.val = { before, after };
+    return tradeOdds.val;
+  }
+
   function tradeResult(A, B) {
     const ev = evaluateTrade(A.roster_id, B.roster_id);
     const big = Math.max(ev.giveAdj, ev.getAdj, 1);
@@ -870,6 +1015,17 @@
           <tbody><tr><td>${teamHTML(A.roster_id)}</td>${ev.a.map((x) => `<td class="num ${signCls(x)}">${sgn(x)}</td>`).join("")}</tr>
                  <tr><td>${teamHTML(B.roster_id)}</td>${ev.b.map((x) => `<td class="num ${signCls(x)}">${sgn(x)}</td>`).join("")}</tr></tbody></table>
         <p class="note">${fit(A, ev.a)} ${fit(B, ev.b)}</p>
+        ${(() => {
+          const od = tradeOdds(A.roster_id, B.roster_id);
+          if (!od) return "";
+          const row = (rid) => {
+            const b = od.before[rid], a = od.after[rid];
+            const cell = (x, y) => `<td class="num">${pct(x)} → <b class="${signCls(y - x)}">${pct(y)}</b></td>`;
+            return `<tr><td>${teamHTML(rid)}</td>${cell(b.playoffs, a.playoffs)}${cell(b.title, a.title)}</tr>`;
+          };
+          return `<table class="mini odds-change"><thead><tr><th>This season</th><th class="num">Playoffs</th><th class="num">Title</th></tr></thead>
+            <tbody>${row(A.roster_id)}${row(B.roster_id)}</tbody></table>`;
+        })()}
       </div>`;
   }
   function renderTrade() {
@@ -916,6 +1072,7 @@
       ${selected ? `<button class="tray" type="button" data-totop="1"><span>${esc(A?.team || "Team A")} <b>${fmt(pkgValue([...state.give].map(assetValue)))}</b>, ${esc(B?.team || "Team B")} <b>${fmt(pkgValue([...state.get].map(assetValue)))}</b></span><span>${A && B ? "See result" : "Choose teams"}</span></button>` : ""}
       ${how("How trades are judged", [
         `A package is worth less than the sum of its parts: two equal players count as about 1.7 of one, because only so many players start. A trade is fair within 10%.`,
+        `This-season odds come from ${SIM_N.toLocaleString()} simulated seasons, player by player: each week every player plays or not (byes, injuries), each team starts its best available players, and each starter's score varies around his projection. The trade is applied and the same seasons replayed, so the change in playoff and title odds is the trade's effect.`,
         `Lineup change compares each team's best possible starting lineup before and after, in points per week: now (injured players left out), next season, and in two seasons.`,
         `Suggestions are worked out for every team: fair deals that move the team toward its window and help the partner's. Teams chasing the playoffs must get better now, everyone else over the next two seasons.`,
       ])}`;

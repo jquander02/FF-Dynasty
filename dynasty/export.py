@@ -325,6 +325,7 @@ def run(store: Store, site_dir: Path) -> dict[str, int]:
     # this week: lineups, matchup odds, waiver targets (dynasty/weekly.py)
     wk = store.query("SELECT body FROM raw_snapshot WHERE endpoint='weekly'")
     _write(out, "weekly.json", json.loads(wk[0]["body"]) if wk and wk[0]["body"] else {"week": None})
+    _write(out, "sim.json", sim_export(store))
     sc = store.query("SELECT body FROM raw_snapshot WHERE endpoint='schedule_report'")
     _write(out, "schedule.json", json.loads(sc[0]["body"]) if sc and sc[0]["body"] else {"teams": {}})
     # PIN lock: everything but the League and Past trades data goes into an encrypted vault
@@ -378,4 +379,42 @@ def _value_fields(pid, vals, proj, cur_ppg) -> dict:
         "p2": pr["ppg_y2"] if pr else None,
         "ppg": c[0] if c else None,
         "gp": c[1] if c else None,
+    }
+
+
+def sim_export(store: Store) -> dict:
+    """Inputs for the trade lab's season simulation (same model as dynasty/playersim.py)."""
+    from . import playersim
+    from .picks import team_sd
+    from .weekly import SD_FIT
+    data = playersim.load(store)
+    if not data:
+        return {"weeks": []}
+    lg = store.query("SELECT * FROM league_season WHERE is_current=1")[0]
+    lid = lg["league_id"]
+    last_reg = int(lg["playoff_week_start"] or 15) - 1
+    st = store.query("SELECT body FROM raw_snapshot WHERE endpoint='state/nfl'")
+    state = json.loads(st[0]["body"]) if st and st[0]["body"] else {}
+    cur = int(state.get("week") or 0)
+    standings = {r["roster_id"]: [r["wins"] or 0, r["ties"] or 0, round(r["fpts"] or 0.0, 2)]
+                 for r in store.query("SELECT roster_id, wins, ties, fpts FROM roster WHERE league_id=?", (lid,))}
+    sched = {}
+    for r in store.query("SELECT week, roster_id, matchup_id FROM schedule WHERE league_id=? AND week<=?", (lid, last_reg)):
+        sched.setdefault(r["week"], {}).setdefault(r["matchup_id"], []).append(r["roster_id"])
+    pairs = {str(w): [v for v in ms.values() if len(v) == 2] for w, ms in sched.items()}
+    fixed = {}
+    if store.query("SELECT 1 FROM sqlite_master WHERE name='week_team'"):
+        for r in store.query("SELECT roster_id, week, mean, sd FROM week_team"):
+            fixed[str(r["roster_id"])] = [r["week"], r["mean"], max(r["sd"] or 0.0, 0.5)]
+    has_mean = "mean_weekly" in {r["name"] for r in store.query("PRAGMA table_info(season_sim)")}
+    means = {r["roster_id"]: r["mean_weekly"] for r in store.query("SELECT roster_id, mean_weekly FROM season_sim")} \
+        if has_mean else {}
+    return {
+        "week": cur, "weeks": data["weeks"], "slots": data["slots"], "last_regular_week": last_reg,
+        "playoff_teams": lg["playoff_teams"] or 6, "team_sd": round(team_sd(store), 2),
+        "sd_fit": {k: list(v) for k, v in SD_FIT.items()},
+        "standings": standings, "schedule": pairs, "this_week": fixed, "means": means,
+        "roster": data["roster"],
+        "players": {pid: {"pos": p["pos"], "m": [round(x, 2) for x in p["m"]], "p": [round(x, 3) for x in p["p"]]}
+                    for pid, p in data["players"].items()},
     }
