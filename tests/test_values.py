@@ -250,6 +250,14 @@ class ValuePipelineTest(unittest.TestCase):
         self.assertIsNotNone(cmc["dp_scaled"])
         self.assertEqual(sorted(r["overall_rank"] for r in v.values()), list(range(1, len(v) + 1)))
 
+    def test_stale_source_dropped(self):
+        # the fixture's DynastyProcess scrape is from August: more than STALE_DAYS old
+        self.assertIn("dynastyprocess", self.values["stale_sources"])
+        cmc = {r["player_id"]: r for r in self.q("SELECT * FROM player_value")}["4034"]
+        parts = [(0.6, cmc["model_scaled"]), (0.3, cmc["fc_value"])]
+        parts = [(a, b) for a, b in parts if b is not None]
+        self.assertAlmostEqual(cmc["value"], round(sum(a * b for a, b in parts) / sum(a for a, _ in parts), 1), places=0)
+
     def test_custom_weights_market_only(self):
         values.build(self.store, {"model": 0.0, "fantasycalc": 1.0, "dynastyprocess": 0.0})
         v = self.q("SELECT value FROM player_value WHERE player_id='6794'")[0]["value"]

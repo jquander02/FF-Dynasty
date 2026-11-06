@@ -104,6 +104,14 @@ jobs:
         run: |
           python -m dynasty.backtest bundle data/dynasty.db backtest-bundle.json.gz
           python -m dynasty.backtest run backtest-bundle.json.gz --json backtest-report.json | tee backtest.log
+          # Sleeper's past weekly projections (for testing projection blends): fetched once, then kept
+          # on the site-data branch and carried forward
+          git fetch -q --depth 1 origin site-data 2>/dev/null \
+            && git show origin/site-data:backtest/sleeper-proj-history.json.gz > sleeper-proj-history.json.gz 2>/dev/null \
+            || rm -f sleeper-proj-history.json.gz
+          if [ ! -s sleeper-proj-history.json.gz ]; then
+            python -m dynasty.backtest sleeper-history data/dynasty.db sleeper-proj-history.json.gz | tee -a backtest.log || true
+          fi
           msg=$(python3 -c 'import sys; s=open("backtest.log").read(); print(s.replace("%","%25").replace("\n","%0A"))')
           echo "::notice title=Backtest::$msg"
 
@@ -151,6 +159,7 @@ jobs:
           cd site/data
           mkdir -p backtest
           cp ../../backtest-bundle.json.gz ../../backtest-report.json backtest/ 2>/dev/null || true
+          cp ../../sleeper-proj-history.json.gz backtest/ 2>/dev/null || true
           git init -q -b site-data
           git add .
           git -c user.name="refresh-bot" -c user.email="refresh-bot@users.noreply.github.com" commit -qm "Data snapshot $(date -u +%FT%TZ)"

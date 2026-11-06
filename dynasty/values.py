@@ -11,10 +11,14 @@ A model value of 0 (projects below replacement) counts as a real 0, not as missi
 
 from __future__ import annotations
 
+import logging
+
 import time
 from .store import Store
 
+log = logging.getLogger(__name__)
 DEFAULT_WEIGHTS = {"model": 0.6, "fantasycalc": 0.3, "dynastyprocess": 0.1}
+STALE_DAYS = 21   # a market source whose data is older than this drops out of the blend
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS player_value (
     snapshot_date TEXT, player_id TEXT, position TEXT,
@@ -59,6 +63,34 @@ def build(store: Store, weights: dict | None = None) -> dict:
 
     fc = latest("fantasycalc")
     dp = latest("dynastyprocess")
+    # freshness: our last successful pull, or for DynastyProcess the date FantasyPros was scraped
+    import datetime as _dt
+    import json as _json
+    stale = {}
+    today_d = _dt.date.today()
+    for src in ("fantasycalc", "dynastyprocess"):
+        if not has_market:
+            continue
+        r = store.query("SELECT MAX(snapshot_date) d FROM market_value WHERE source=?", (src,))[0]["d"]
+        dates = [r] if r else []
+        if src == "dynastyprocess" and r:
+            for x in store.query("SELECT extra FROM market_value WHERE source=? AND snapshot_date=? LIMIT 50", (src, r)):
+                try:
+                    sd = _json.loads(x["extra"] or "{}").get("scrape_date")
+                except ValueError:
+                    sd = None
+                if sd:
+                    dates.append(sd)
+            dates = [min(dates)]
+        if dates:
+            try:
+                age = (today_d - _dt.date.fromisoformat(str(dates[0])[:10])).days
+            except ValueError:
+                age = 0
+            if age > STALE_DAYS:
+                stale[src] = age
+                w[src] = 0.0
+                log.warning("%s data is %d days old: left out of the value blend", src, age)
     proj = {
         r["player_id"]: (r["position"], r["model_value"] or 0.0)
         for r in store.query("SELECT player_id, position, model_value FROM player_projection")
@@ -124,6 +156,7 @@ def build(store: Store, weights: dict | None = None) -> dict:
     return {
         "valued": len(rows),
         "with_model": len(model_scaled),
+        "stale_sources": stale or None,
         "with_fantasycalc": len(fc),
         "with_dynastyprocess": len(dp_scaled),
     }

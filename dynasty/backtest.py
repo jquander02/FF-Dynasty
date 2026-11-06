@@ -548,12 +548,56 @@ def _parse_set(items: list[str], cfg: ModelConfig) -> ModelConfig:
     return replace(cfg, **upd)
 
 
+def sleeper_history(db: str, out: str, seasons: str) -> int:
+    """Sleeper's weekly projections for past seasons, scored with this league's settings and keyed by
+    gsis id: {season: {week: {gsis: pts}}}. Past weeks are cached for good, so this is a one-time fetch."""
+    import gzip as _gz
+    from pathlib import Path as _P
+    from .ingest_sleeper import projection_points
+    from .sleeper import SleeperClient
+    from .store import Store
+    st = Store(db)
+    lg = st.query("SELECT scoring_settings FROM league_season WHERE is_current=1")
+    scoring = json.loads(lg[0]["scoring_settings"] or "{}") if lg else {}
+    gsis = {r["player_id"]: r["gsis_id"] for r in st.query("SELECT player_id, gsis_id FROM player_xref WHERE gsis_id IS NOT NULL")}
+    pos = {r["player_id"]: r["position"] for r in st.query("SELECT player_id, position FROM player")}
+    import tempfile as _tf
+    client = SleeperClient(cache_dir=_P(_tf.mkdtemp(prefix="sleeper-proj-")))
+    lo, hi = (int(x) for x in seasons.split("-"))
+    res, n = {}, 0
+    for s in range(lo, hi + 1):
+        for w in range(1, 19):
+            try:
+                got = client.projections(s, w, ttl=None)
+            except Exception as exc:  # noqa: BLE001
+                print(f"sleeper {s} wk {w}: {exc}")
+                continue
+            wk = {}
+            for pid, stt in got.items():
+                if pos.get(pid) in ("QB", "RB", "WR", "TE") and pid in gsis:
+                    p = projection_points(stt, scoring, pos.get(pid))
+                    if p is not None:
+                        wk[gsis[pid]] = round(p, 2)
+            if wk:
+                res.setdefault(str(s), {})[str(w)] = wk
+                n += len(wk)
+    with _gz.open(out, "wt") as f:
+        json.dump(res, f, separators=(",", ":"))
+    print(f"sleeper history: {n} player-weeks, seasons {sorted(res)}, weeks per season "
+          f"{ {k: len(v) for k, v in res.items()} }")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="dynasty.backtest")
     sub = ap.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("bundle")
     b.add_argument("db")
     b.add_argument("out")
+    h = sub.add_parser("sleeper-history")   # Sleeper's past weekly projections, for testing projection blends
+    h.add_argument("db")
+    h.add_argument("out")
+    h.add_argument("--seasons", default="2020-2025")
     r = sub.add_parser("run")
     r.add_argument("bundle")
     r.add_argument("--json")
@@ -567,6 +611,8 @@ def main(argv=None) -> int:
               f"{len(bun['birth'])} birthdates, seasons {min(s['season'] for s in bun['seasons'])}-"
               f"{max(s['season'] for s in bun['seasons'])}")
         return 0
+    if a.cmd == "sleeper-history":
+        return sleeper_history(a.db, a.out, a.seasons)
     rep = run(load_bundle(a.bundle), _parse_set(a.set, ModelConfig()))
     if a.json:
         with open(a.json, "w") as f:
