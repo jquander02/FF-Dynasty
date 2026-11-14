@@ -1,0 +1,1141 @@
+{
+ "config": {
+  "min_games_curve": 6,
+  "curve_min_games_next": 6,
+  "curve_basis": "ppg",
+  "curve_weight": "min",
+  "curve_shrink_games": 200.0,
+  "recency": [
+   1.0,
+   0.5,
+   0.25
+  ],
+  "actual_vs_expected": 1.0,
+  "regress_games": 2.0,
+  "late_weight": 0.0,
+  "inseason_weight": 1.0,
+  "use_ranges": false,
+  "td_regress": 0.0,
+  "learned_current": true,
+  "pass_td_pts": 4.0,
+  "prior_curve": true,
+  "prior_per_game": true,
+  "prior_games": 1.0,
+  "vet_prior_share": 0.0,
+  "growth_cap": 1.8,
+  "by_position": {},
+  "availability": 0.8,
+  "play_from_history": true,
+  "play_shrink": 0.25,
+  "play_cap": true,
+  "uncertainty_scale": 0.4,
+  "young_uncertainty_scale": 0.2,
+  "position_scale": {
+   "QB": 0.854,
+   "RB": 1.152,
+   "WR": 1.108,
+   "TE": 0.886
+  },
+  "season_games": 17,
+  "discounts": [
+   1.0,
+   0.9,
+   0.75,
+   0.6
+  ],
+  "replacement_depth": 1.5,
+  "teams": 12
+ },
+ "as_of": [
+  2015,
+  2024
+ ],
+ "rows": 5094,
+ "overall": {
+  "h1": {
+   "model": {
+    "n": 2100,
+    "mae": 3.29,
+    "bias": -0.27
+   },
+   "avg": {
+    "n": 2100,
+    "mae": 3.48,
+    "bias": -0.07
+   },
+   "last": {
+    "n": 2067,
+    "mae": 3.66,
+    "bias": -0.11
+   }
+  },
+  "h2": {
+   "model": {
+    "n": 1706,
+    "mae": 3.82,
+    "bias": -0.1
+   },
+   "avg": {
+    "n": 1706,
+    "mae": 4.14,
+    "bias": -0.08
+   },
+   "last": {
+    "n": 1676,
+    "mae": 4.3,
+    "bias": -0.08
+   }
+  },
+  "h3": {
+   "model": {
+    "n": 1288,
+    "mae": 4.13,
+    "bias": -0.04
+   },
+   "avg": {
+    "n": 1288,
+    "mae": 4.5,
+    "bias": 0.01
+   },
+   "last": {
+    "n": 1268,
+    "mae": 4.64,
+    "bias": 0.1
+   }
+  }
+ },
+ "by_position": {
+  "QB": {
+   "h1": {
+    "model": {
+     "n": 397,
+     "mae": 3.25,
+     "bias": 0.41
+    },
+    "avg": {
+     "n": 397,
+     "mae": 3.37,
+     "bias": 0.08
+    },
+    "last": {
+     "n": 388,
+     "mae": 3.83,
+     "bias": -0.15
+    }
+   },
+   "h2": {
+    "model": {
+     "n": 324,
+     "mae": 3.63,
+     "bias": 0.62
+    },
+    "avg": {
+     "n": 324,
+     "mae": 3.81,
+     "bias": 0.05
+    },
+    "last": {
+     "n": 315,
+     "mae": 4.14,
+     "bias": -0.09
+    }
+   }
+  },
+  "RB": {
+   "h1": {
+    "model": {
+     "n": 576,
+     "mae": 3.66,
+     "bias": -0.77
+    },
+    "avg": {
+     "n": 576,
+     "mae": 3.9,
+     "bias": -0.16
+    },
+    "last": {
+     "n": 570,
+     "mae": 4.02,
+     "bias": -0.26
+    }
+   },
+   "h2": {
+    "model": {
+     "n": 450,
+     "mae": 4.33,
+     "bias": -0.68
+    },
+    "avg": {
+     "n": 450,
+     "mae": 4.66,
+     "bias": -0.15
+    },
+    "last": {
+     "n": 444,
+     "mae": 4.86,
+     "bias": -0.17
+    }
+   }
+  },
+  "WR": {
+   "h1": {
+    "model": {
+     "n": 856,
+     "mae": 3.11,
+     "bias": -0.14
+    },
+    "avg": {
+     "n": 856,
+     "mae": 3.34,
+     "bias": 0.06
+    },
+    "last": {
+     "n": 847,
+     "mae": 3.48,
+     "bias": 0.07
+    }
+   },
+   "h2": {
+    "model": {
+     "n": 700,
+     "mae": 3.64,
+     "bias": 0.13
+    },
+    "avg": {
+     "n": 700,
+     "mae": 4.03,
+     "bias": 0.09
+    },
+    "last": {
+     "n": 690,
+     "mae": 4.13,
+     "bias": 0.1
+    }
+   }
+  },
+  "TE": {
+   "h1": {
+    "model": {
+     "n": 271,
+     "mae": 3.13,
+     "bias": -0.64
+    },
+    "avg": {
+     "n": 271,
+     "mae": 3.17,
+     "bias": -0.48
+    },
+    "last": {
+     "n": 262,
+     "mae": 3.21,
+     "bias": -0.32
+    }
+   },
+   "h2": {
+    "model": {
+     "n": 232,
+     "mae": 3.67,
+     "bias": -0.66
+    },
+    "avg": {
+     "n": 232,
+     "mae": 3.91,
+     "bias": -0.64
+    },
+    "last": {
+     "n": 227,
+     "mae": 3.91,
+     "bias": -0.43
+    }
+   }
+  }
+ },
+ "by_age": {
+  "QB <23": {
+   "n": 40,
+   "mae": 4.33,
+   "bias": 0.35
+  },
+  "QB 23-25": {
+   "n": 212,
+   "mae": 3.65,
+   "bias": 0.41
+  },
+  "QB 26-28": {
+   "n": 172,
+   "mae": 3.54,
+   "bias": 1.64
+  },
+  "QB 29-31": {
+   "n": 115,
+   "mae": 3.28,
+   "bias": 0.9
+  },
+  "QB 32+": {
+   "n": 182,
+   "mae": 2.94,
+   "bias": -0.67
+  },
+  "RB <23": {
+   "n": 100,
+   "mae": 3.69,
+   "bias": -1.38
+  },
+  "RB 23-25": {
+   "n": 487,
+   "mae": 4.27,
+   "bias": -0.87
+  },
+  "RB 26-28": {
+   "n": 315,
+   "mae": 3.65,
+   "bias": -0.31
+  },
+  "RB 29-31": {
+   "n": 101,
+   "mae": 3.7,
+   "bias": -0.66
+  },
+  "RB 32+": {
+   "n": 23,
+   "mae": 3.7,
+   "bias": -1.11
+  },
+  "WR <23": {
+   "n": 153,
+   "mae": 3.72,
+   "bias": -0.41
+  },
+  "WR 23-25": {
+   "n": 618,
+   "mae": 3.59,
+   "bias": -0.04
+  },
+  "WR 26-28": {
+   "n": 484,
+   "mae": 3.2,
+   "bias": 0.17
+  },
+  "WR 29-31": {
+   "n": 218,
+   "mae": 2.89,
+   "bias": -0.15
+  },
+  "WR 32+": {
+   "n": 83,
+   "mae": 2.89,
+   "bias": 0.06
+  },
+  "TE <23": {
+   "n": 32,
+   "mae": 3.76,
+   "bias": -1.2
+  },
+  "TE 23-25": {
+   "n": 151,
+   "mae": 3.9,
+   "bias": -0.96
+  },
+  "TE 26-28": {
+   "n": 163,
+   "mae": 3.44,
+   "bias": -0.66
+  },
+  "TE 29-31": {
+   "n": 100,
+   "mae": 3.04,
+   "bias": -0.05
+  },
+  "TE 32+": {
+   "n": 57,
+   "mae": 2.21,
+   "bias": -0.53
+  }
+ },
+ "by_nfl_year": {
+  "QB yr1": {
+   "n": 47,
+   "mae": 3.76,
+   "bias": 0.15
+  },
+  "QB yr2": {
+   "n": 48,
+   "mae": 4.28,
+   "bias": 1.37
+  },
+  "QB yr3": {
+   "n": 57,
+   "mae": 2.37,
+   "bias": -0.51
+  },
+  "RB yr1": {
+   "n": 70,
+   "mae": 3.73,
+   "bias": -1.76
+  },
+  "RB yr2": {
+   "n": 99,
+   "mae": 4.49,
+   "bias": -1.62
+  },
+  "RB yr3": {
+   "n": 131,
+   "mae": 3.38,
+   "bias": -0.55
+  },
+  "WR yr1": {
+   "n": 88,
+   "mae": 3.85,
+   "bias": -1.73
+  },
+  "WR yr2": {
+   "n": 131,
+   "mae": 3.27,
+   "bias": 0.26
+  },
+  "WR yr3": {
+   "n": 175,
+   "mae": 3.3,
+   "bias": -0.26
+  },
+  "TE yr1": {
+   "n": 17,
+   "mae": 4.65,
+   "bias": -4.49
+  },
+  "TE yr2": {
+   "n": 35,
+   "mae": 3.69,
+   "bias": 1.27
+  },
+  "TE yr3": {
+   "n": 55,
+   "mae": 3.19,
+   "bias": -1.9
+  }
+ },
+ "rank_h1": {
+  "QB": {
+   "model": 0.555,
+   "avg": 0.575,
+   "last": 0.51
+  },
+  "RB": {
+   "model": 0.466,
+   "avg": 0.444,
+   "last": 0.461
+  },
+  "WR": {
+   "model": 0.536,
+   "avg": 0.5,
+   "last": 0.499
+  },
+  "TE": {
+   "model": 0.24,
+   "avg": 0.281,
+   "last": 0.328
+  }
+ },
+ "value_rank_3yr": {
+  "QB": 0.368,
+  "RB": 0.56,
+  "WR": 0.607,
+  "TE": 0.259
+ },
+ "value": {
+  "players": 1871,
+  "offseasons": [
+   2015,
+   2016,
+   2017,
+   2018,
+   2019,
+   2020,
+   2021,
+   2022
+  ],
+  "overall_top150": {
+   "n": 1200,
+   "valued": 115,
+   "produced": 108,
+   "ratio": 0.94,
+   "beat": 0.37,
+   "mae": 78
+  },
+  "by_tier": {
+   "top 12": {
+    "n": 96,
+    "valued": 393,
+    "produced": 287,
+    "ratio": 0.73,
+    "beat": 0.3,
+    "mae": 163
+   },
+   "13-24": {
+    "n": 96,
+    "valued": 250,
+    "produced": 244,
+    "ratio": 0.97,
+    "beat": 0.46,
+    "mae": 116
+   },
+   "25-48": {
+    "n": 192,
+    "valued": 167,
+    "produced": 151,
+    "ratio": 0.9,
+    "beat": 0.39,
+    "mae": 98
+   },
+   "49-96": {
+    "n": 384,
+    "valued": 82,
+    "produced": 89,
+    "ratio": 1.08,
+    "beat": 0.41,
+    "mae": 77
+   },
+   "97+": {
+    "n": 1103,
+    "valued": 14,
+    "produced": 44,
+    "ratio": 3.24,
+    "beat": 0.55,
+    "mae": 47
+   }
+  },
+  "by_position": {
+   "QB": {
+    "n": 222,
+    "valued": 75,
+    "produced": 71,
+    "ratio": 0.94,
+    "beat": 0.33,
+    "mae": 60
+   },
+   "RB": {
+    "n": 334,
+    "valued": 138,
+    "produced": 130,
+    "ratio": 0.94,
+    "beat": 0.37,
+    "mae": 97
+   },
+   "WR": {
+    "n": 491,
+    "valued": 127,
+    "produced": 120,
+    "ratio": 0.94,
+    "beat": 0.39,
+    "mae": 76
+   },
+   "TE": {
+    "n": 153,
+    "valued": 83,
+    "produced": 78,
+    "ratio": 0.95,
+    "beat": 0.33,
+    "mae": 66
+   }
+  },
+  "by_age": {
+   "QB <23": {
+    "n": 51,
+    "valued": 62,
+    "produced": 68,
+    "ratio": 1.1,
+    "beat": 0.33,
+    "mae": 63
+   },
+   "QB 23-25": {
+    "n": 63,
+    "valued": 108,
+    "produced": 94,
+    "ratio": 0.87,
+    "beat": 0.29,
+    "mae": 78
+   },
+   "QB 26-28": {
+    "n": 48,
+    "valued": 83,
+    "produced": 57,
+    "ratio": 0.69,
+    "beat": 0.25,
+    "mae": 43
+   },
+   "QB 29-31": {
+    "n": 28,
+    "valued": 48,
+    "produced": 54,
+    "ratio": 1.12,
+    "beat": 0.39,
+    "mae": 47
+   },
+   "QB 32+": {
+    "n": 32,
+    "valued": 45,
+    "produced": 65,
+    "ratio": 1.44,
+    "beat": 0.5,
+    "mae": 54
+   },
+   "RB <23": {
+    "n": 103,
+    "valued": 171,
+    "produced": 160,
+    "ratio": 0.93,
+    "beat": 0.43,
+    "mae": 114
+   },
+   "RB 23-25": {
+    "n": 157,
+    "valued": 135,
+    "produced": 133,
+    "ratio": 0.98,
+    "beat": 0.39,
+    "mae": 101
+   },
+   "RB 26-28": {
+    "n": 61,
+    "valued": 100,
+    "produced": 94,
+    "ratio": 0.94,
+    "beat": 0.3,
+    "mae": 67
+   },
+   "RB 29-31": {
+    "n": 11,
+    "valued": 79,
+    "produced": 17,
+    "ratio": 0.21,
+    "beat": 0.0,
+    "mae": 63
+   },
+   "RB 32+": {
+    "n": 2,
+    "valued": 40,
+    "produced": 54,
+    "ratio": 1.35,
+    "beat": 0.5,
+    "mae": 48
+   },
+   "WR <23": {
+    "n": 122,
+    "valued": 145,
+    "produced": 130,
+    "ratio": 0.9,
+    "beat": 0.41,
+    "mae": 89
+   },
+   "WR 23-25": {
+    "n": 200,
+    "valued": 131,
+    "produced": 116,
+    "ratio": 0.89,
+    "beat": 0.34,
+    "mae": 74
+   },
+   "WR 26-28": {
+    "n": 113,
+    "valued": 124,
+    "produced": 136,
+    "ratio": 1.1,
+    "beat": 0.44,
+    "mae": 72
+   },
+   "WR 29-31": {
+    "n": 46,
+    "valued": 88,
+    "produced": 83,
+    "ratio": 0.94,
+    "beat": 0.43,
+    "mae": 70
+   },
+   "WR 32+": {
+    "n": 10,
+    "valued": 47,
+    "produced": 61,
+    "ratio": 1.29,
+    "beat": 0.4,
+    "mae": 51
+   },
+   "TE <23": {
+    "n": 25,
+    "valued": 59,
+    "produced": 35,
+    "ratio": 0.59,
+    "beat": 0.36,
+    "mae": 47
+   },
+   "TE 23-25": {
+    "n": 48,
+    "valued": 88,
+    "produced": 85,
+    "ratio": 0.97,
+    "beat": 0.31,
+    "mae": 81
+   },
+   "TE 26-28": {
+    "n": 50,
+    "valued": 96,
+    "produced": 94,
+    "ratio": 0.98,
+    "beat": 0.32,
+    "mae": 68
+   },
+   "TE 29-31": {
+    "n": 21,
+    "valued": 80,
+    "produced": 96,
+    "ratio": 1.2,
+    "beat": 0.43,
+    "mae": 64
+   },
+   "TE 32+": {
+    "n": 9,
+    "valued": 60,
+    "produced": 35,
+    "ratio": 0.59,
+    "beat": 0.11,
+    "mae": 27
+   }
+  },
+  "by_nfl_year": {
+   "QB yr0": {
+    "n": 27,
+    "valued": 44,
+    "produced": 62,
+    "ratio": 1.41,
+    "beat": 0.41,
+    "mae": 70
+   },
+   "QB yr1": {
+    "n": 25,
+    "valued": 87,
+    "produced": 74,
+    "ratio": 0.85,
+    "beat": 0.28,
+    "mae": 65
+   },
+   "QB yr2": {
+    "n": 48,
+    "valued": 68,
+    "produced": 80,
+    "ratio": 1.17,
+    "beat": 0.38,
+    "mae": 60
+   },
+   "RB yr0": {
+    "n": 39,
+    "valued": 125,
+    "produced": 183,
+    "ratio": 1.46,
+    "beat": 0.67,
+    "mae": 103
+   },
+   "RB yr1": {
+    "n": 59,
+    "valued": 168,
+    "produced": 123,
+    "ratio": 0.73,
+    "beat": 0.27,
+    "mae": 119
+   },
+   "RB yr2": {
+    "n": 89,
+    "valued": 138,
+    "produced": 112,
+    "ratio": 0.81,
+    "beat": 0.31,
+    "mae": 93
+   },
+   "WR yr0": {
+    "n": 42,
+    "valued": 100,
+    "produced": 104,
+    "ratio": 1.04,
+    "beat": 0.48,
+    "mae": 96
+   },
+   "WR yr1": {
+    "n": 68,
+    "valued": 129,
+    "produced": 122,
+    "ratio": 0.95,
+    "beat": 0.43,
+    "mae": 64
+   },
+   "WR yr2": {
+    "n": 110,
+    "valued": 150,
+    "produced": 121,
+    "ratio": 0.81,
+    "beat": 0.33,
+    "mae": 78
+   },
+   "TE yr0": {
+    "n": 5,
+    "valued": 41,
+    "produced": 53,
+    "ratio": 1.28,
+    "beat": 0.8,
+    "mae": 29
+   },
+   "TE yr1": {
+    "n": 20,
+    "valued": 65,
+    "produced": 43,
+    "ratio": 0.65,
+    "beat": 0.25,
+    "mae": 67
+   },
+   "TE yr2": {
+    "n": 27,
+    "valued": 79,
+    "produced": 86,
+    "ratio": 1.1,
+    "beat": 0.26,
+    "mae": 73
+   }
+  },
+  "rank_corr_top150": 0.595,
+  "rank_corr_by_offseason": {
+   "2015": 0.512,
+   "2016": 0.48,
+   "2017": 0.614,
+   "2018": 0.608,
+   "2019": 0.556,
+   "2020": 0.663,
+   "2021": 0.622,
+   "2022": 0.703
+  },
+  "top36_hit_rate": 0.549,
+  "abs_error_top150": 78,
+  "most_overvalued": [
+   {
+    "name": "Saquon Barkley",
+    "pos": "RB",
+    "as_of": 2018,
+    "age": 21.6,
+    "valued": 835,
+    "produced": 143
+   },
+   {
+    "name": "Todd Gurley",
+    "pos": "RB",
+    "as_of": 2018,
+    "age": 24.1,
+    "valued": 589,
+    "produced": 91
+   },
+   {
+    "name": "Saquon Barkley",
+    "pos": "RB",
+    "as_of": 2019,
+    "age": 22.6,
+    "valued": 660,
+    "produced": 166
+   },
+   {
+    "name": "Odell Beckham Jr.",
+    "pos": "WR",
+    "as_of": 2016,
+    "age": 23.8,
+    "valued": 568,
+    "produced": 183
+   },
+   {
+    "name": "Le'Veon Bell",
+    "pos": "RB",
+    "as_of": 2017,
+    "age": 25.5,
+    "valued": 442,
+    "produced": 70
+   },
+   {
+    "name": "Christian McCaffrey",
+    "pos": "RB",
+    "as_of": 2019,
+    "age": 23.2,
+    "valued": 693,
+    "produced": 327
+   },
+   {
+    "name": "JuJu Smith-Schuster",
+    "pos": "WR",
+    "as_of": 2018,
+    "age": 21.8,
+    "valued": 421,
+    "produced": 62
+   },
+   {
+    "name": "David Johnson",
+    "pos": "RB",
+    "as_of": 2016,
+    "age": 24.7,
+    "valued": 472,
+    "produced": 131
+   },
+   {
+    "name": "James Robinson",
+    "pos": "RB",
+    "as_of": 2020,
+    "age": 22.1,
+    "valued": 373,
+    "produced": 40
+   },
+   {
+    "name": "Odell Beckham Jr.",
+    "pos": "WR",
+    "as_of": 2015,
+    "age": 22.8,
+    "valued": 608,
+    "produced": 283
+   },
+   {
+    "name": "Michael Thomas",
+    "pos": "WR",
+    "as_of": 2019,
+    "age": 26.5,
+    "valued": 350,
+    "produced": 31
+   },
+   {
+    "name": "Kareem Hunt",
+    "pos": "RB",
+    "as_of": 2018,
+    "age": 23.1,
+    "valued": 438,
+    "produced": 120
+   }
+  ],
+  "most_undervalued": [
+   {
+    "name": "Alvin Kamara",
+    "pos": "RB",
+    "as_of": 2016,
+    "age": 21.1,
+    "valued": 22,
+    "produced": 505
+   },
+   {
+    "name": "Puka Nacua",
+    "pos": "WR",
+    "as_of": 2022,
+    "age": 21.3,
+    "valued": 0,
+    "produced": 478
+   },
+   {
+    "name": "Melvin Gordon",
+    "pos": "RB",
+    "as_of": 2015,
+    "age": 22.4,
+    "valued": 1,
+    "produced": 433
+   },
+   {
+    "name": "De'Von Achane",
+    "pos": "RB",
+    "as_of": 2022,
+    "age": 20.9,
+    "valued": 6,
+    "produced": 422
+   },
+   {
+    "name": "Justin Jefferson",
+    "pos": "WR",
+    "as_of": 2019,
+    "age": 20.2,
+    "valued": 58,
+    "produced": 470
+   },
+   {
+    "name": "Saquon Barkley",
+    "pos": "RB",
+    "as_of": 2021,
+    "age": 24.6,
+    "valued": 53,
+    "produced": 445
+   },
+   {
+    "name": "Kyren Williams",
+    "pos": "RB",
+    "as_of": 2022,
+    "age": 22.0,
+    "valued": 0,
+    "produced": 391
+   },
+   {
+    "name": "Derrick Henry",
+    "pos": "RB",
+    "as_of": 2018,
+    "age": 24.7,
+    "valued": 57,
+    "produced": 443
+   },
+   {
+    "name": "Todd Gurley",
+    "pos": "RB",
+    "as_of": 2016,
+    "age": 22.1,
+    "valued": 192,
+    "produced": 565
+   },
+   {
+    "name": "Amon-Ra St. Brown",
+    "pos": "WR",
+    "as_of": 2020,
+    "age": 20.9,
+    "valued": 0,
+    "produced": 366
+   },
+   {
+    "name": "Josh Allen",
+    "pos": "QB",
+    "as_of": 2019,
+    "age": 23.3,
+    "valued": 63,
+    "produced": 425
+   },
+   {
+    "name": "James Cook",
+    "pos": "RB",
+    "as_of": 2022,
+    "age": 22.9,
+    "valued": 0,
+    "produced": 357
+   }
+  ]
+ },
+ "luck_floor_h1": 1.52,
+ "explained_h1": {
+  "max_r2": 0.821,
+  "model": 0.255,
+  "avg": 0.157,
+  "last": 0.062,
+  "share_of_possible": 0.311
+ },
+ "biggest_misses_h1": [
+  {
+   "name": "James Conner",
+   "pos": "RB",
+   "season": 2018,
+   "age": 23.3,
+   "proj": 2.5,
+   "actual": 21.54
+  },
+  {
+   "name": "Kyren Williams",
+   "pos": "RB",
+   "season": 2023,
+   "age": 23.0,
+   "proj": 5.4,
+   "actual": 21.25
+  },
+  {
+   "name": "David Johnson",
+   "pos": "RB",
+   "season": 2016,
+   "age": 24.7,
+   "proj": 10.1,
+   "actual": 25.49
+  },
+  {
+   "name": "Lamar Jackson",
+   "pos": "QB",
+   "season": 2019,
+   "age": 22.6,
+   "proj": 13.8,
+   "actual": 27.71
+  },
+  {
+   "name": "Puka Nacua",
+   "pos": "WR",
+   "season": 2023,
+   "age": 22.3,
+   "proj": 4.0,
+   "actual": 17.56
+  },
+  {
+   "name": "Mike White",
+   "pos": "QB",
+   "season": 2023,
+   "age": 28.4,
+   "proj": 13.9,
+   "actual": 0.34
+  },
+  {
+   "name": "Melvin Gordon",
+   "pos": "RB",
+   "season": 2016,
+   "age": 23.4,
+   "proj": 6.4,
+   "actual": 19.28
+  },
+  {
+   "name": "Jameis Winston",
+   "pos": "QB",
+   "season": 2023,
+   "age": 29.7,
+   "proj": 14.8,
+   "actual": 1.99
+  },
+  {
+   "name": "Cooper Kupp",
+   "pos": "WR",
+   "season": 2021,
+   "age": 28.2,
+   "proj": 13.4,
+   "actual": 25.85
+  },
+  {
+   "name": "Marcus Mariota",
+   "pos": "QB",
+   "season": 2021,
+   "age": 27.8,
+   "proj": 14.5,
+   "actual": 2.12
+  },
+  {
+   "name": "Todd Gurley",
+   "pos": "RB",
+   "season": 2017,
+   "age": 23.1,
+   "proj": 13.5,
+   "actual": 25.55
+  },
+  {
+   "name": "Willie Snead",
+   "pos": "WR",
+   "season": 2017,
+   "age": 24.9,
+   "proj": 14.0,
+   "actual": 2.15
+  },
+  {
+   "name": "Jeff Driskel",
+   "pos": "QB",
+   "season": 2022,
+   "age": 29.4,
+   "proj": 14.3,
+   "actual": 2.46
+  },
+  {
+   "name": "Deshaun Watson",
+   "pos": "QB",
+   "season": 2017,
+   "age": 22.0,
+   "proj": 12.3,
+   "actual": 24.12
+  },
+  {
+   "name": "Mike Williams",
+   "pos": "WR",
+   "season": 2017,
+   "age": 22.9,
+   "proj": 14.1,
+   "actual": 2.28
+  }
+ ]
+}
