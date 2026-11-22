@@ -32,7 +32,7 @@ jobs:
     timeout-minutes: 45
     environment:
       name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+      url: ${{ steps.deploy1.outputs.page_url || steps.deploy2.outputs.page_url || steps.deploy3.outputs.page_url }}
     steps:
       - uses: actions/checkout@v7
 
@@ -198,6 +198,28 @@ jobs:
         with:
           path: site
 
+      # GitHub sometimes can't see the just-uploaded app for a few seconds ("No artifacts named
+      # github-pages were found"), or rejects a deploy ("try again later"): wait and retry twice.
       - name: Deploy to GitHub Pages
-        id: deploy
+        id: deploy1
+        continue-on-error: true
+        uses: actions/deploy-pages@v5
+
+      - name: Wait before retrying deploy
+        if: steps.deploy1.outcome == 'failure'
+        run: sleep 60
+
+      - name: Deploy to GitHub Pages (retry)
+        id: deploy2
+        if: steps.deploy1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/deploy-pages@v5
+
+      - name: Wait before last deploy attempt
+        if: steps.deploy1.outcome == 'failure' && steps.deploy2.outcome == 'failure'
+        run: sleep 180
+
+      - name: Deploy to GitHub Pages (last try)
+        id: deploy3
+        if: steps.deploy1.outcome == 'failure' && steps.deploy2.outcome == 'failure'
         uses: actions/deploy-pages@v5
