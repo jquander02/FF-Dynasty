@@ -34,9 +34,9 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -50,7 +50,7 @@ jobs:
       # The database lives in the Actions cache between runs. If it is ever lost,
       # the next full run rebuilds it from scratch (all data is re-downloadable).
       - name: Restore database
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: data
           key: dbz-${{ github.run_id }}
@@ -125,7 +125,7 @@ jobs:
 
       - name: Save database
         if: success()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: data
           key: dbz-${{ github.run_id }}
@@ -145,7 +145,7 @@ jobs:
 
       - name: Back up database
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dynasty-db-encrypted
           path: backup/dynasty.db.gz.enc
@@ -176,7 +176,7 @@ jobs:
       - name: Create Cloudflare Pages project (first run only)
         if: steps.cf.outputs.on == 'true'
         continue-on-error: true
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -184,20 +184,20 @@ jobs:
 
       - name: Deploy to Cloudflare Pages
         if: steps.cf.outputs.on == 'true'
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: pages deploy site --project-name=ff-dynasty --branch=main --commit-dirty=true
 
       - name: Configure Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
 
       - name: Upload app
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: site
 
       - name: Deploy to GitHub Pages
         id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
