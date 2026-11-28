@@ -606,6 +606,8 @@ class _DayScale:
     def __init__(self, store: Store, hist: "_History", info: dict):
         from . import dayvalues
         self.dv = dayvalues
+        last = hist.dates[-1] if hist.dates else None
+        self.today = hist.players.get(last, {}) if last else {}
         self.first = hist.dates[0] if hist.dates else None
         self.by_cut = defaultdict(dict)
         if self.first and store.query("SELECT 1 FROM sqlite_master WHERE name='model_value_asof'"):
@@ -643,10 +645,12 @@ class _DayScale:
             order = sorted(self.by_cut[key].items(), key=lambda x: -x[1])
             self.scaled[key] = {p: (self.curve[i] if i < len(self.curve) and mv > 0 else 0.0)
                                 for i, (p, mv) in enumerate(order)}
-        if pos not in SKILL:
-            return 0
         v = self.scaled[key].get(pid)
-        return round(v) if v else None
+        if v:
+            return round(v)
+        if pos in ("K", "DEF") or (pos not in SKILL and not self.today.get(pid)):
+            return 0          # kickers and defenses carry no dynasty value
+        return None           # e.g. a two-way rookie Sleeper lists at DB: value unknown that day
 
     def pick(self, cut, season, rnd, slot: str | None) -> int:
         """A pick's value that day: the oldest pick values for that draft year and round (the
