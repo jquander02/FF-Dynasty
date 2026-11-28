@@ -356,7 +356,9 @@ def _value_maps(store: Store, season: int):
             for r in store.query("SELECT player_id, value FROM player_value WHERE snapshot_date=?", (old,)):
                 prev[r["player_id"]] = r["value"]
     if _table(store, "player_projection"):
-        for r in store.query("SELECT player_id, ppg_ros, ppg_y1, ppg_y2, talent_ppg, model_value FROM player_projection"):
+        pc = {r["name"] for r in store.query("PRAGMA table_info(player_projection)")}
+        fut = ", value_future" if "value_future" in pc else ""
+        for r in store.query(f"SELECT player_id, ppg_ros, ppg_y1, ppg_y2, talent_ppg, model_value{fut} FROM player_projection"):
             proj[r["player_id"]] = dict(r)
     if _table(store, "player_season"):
         for r in store.query("SELECT player_id, ppg, games FROM player_season WHERE season=? AND player_id IS NOT NULL",

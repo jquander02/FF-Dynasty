@@ -341,6 +341,8 @@ class Phase4PipelineTest(Phase3PipelineTest):
         self.assertTrue(jj["day_est"])
         self.assertEqual(p7001["day"], 8000)   # top-ranked that day: the top value in the curve
         self.assertEqual(jj["day"], 5000)
+        pk = [a for a in theirs["got"] if a["k"] == "pick"][0]
+        self.assertGreater(pk["day"], 0)                                     # pick values: never 0 for lack of history
 
     def test_cut_for(self):
         from dynasty import dayvalues

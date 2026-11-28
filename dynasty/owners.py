@@ -510,7 +510,12 @@ class _DayScale:
         self.curve = sorted((v for p, v in base.items() if info.get(p) and info[p]["position"] in SKILL), reverse=True)
         self.scaled = {}
         self.rounds = defaultdict(list)
-        picks = hist.picks.get(self.first, {}) if self.first else {}
+        # oldest pick snapshot (pick history may start later than player history), else today's
+        pdays = sorted(hist.picks)
+        picks = hist.picks[pdays[0]] if pdays else {}
+        if not picks and store.query("SELECT 1 FROM sqlite_master WHERE name='pick_value'"):
+            picks = {(str(r["season"]), r["round"], r["original_roster_id"]): r["value"] or 0.0
+                     for r in store.query("SELECT season, round, original_roster_id, value FROM pick_value")}
         if picks:
             yr = min(s for s, _, _ in picks)
             for (s, rnd, _), v in picks.items():
