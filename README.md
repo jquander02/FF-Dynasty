@@ -319,7 +319,7 @@ backup before refreshing. Actions minutes are free and unlimited for public repo
 The workflow runs as three jobs with only the permissions each needs: build (read-only: tests,
 refresh, backups), snapshot (writes the site-data branch; can't block the deploy) and deploy
 (GitHub Pages). Actions are pinned to commits. After changing `requirements.txt`, run the "Lock
-dependencies" workflow and commit the `requirements.lock` it prints; the refresh then installs
+dependencies" workflow: it commits a hash-pinned `requirements.lock`, and the refresh then installs
 exactly those hash-checked packages.
 
 When Sleeper renews the league for a new season (new league id), the refresh finds the new league

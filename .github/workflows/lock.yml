@@ -1,12 +1,12 @@
 name: Lock dependencies
 
-# Run by hand after changing requirements.txt: prints a hash-pinned requirements.lock (as an
-# annotation on the run) to commit, so the refresh installs exactly those packages.
+# Run by hand after changing requirements.txt: compiles a hash-pinned requirements.lock, checks
+# the tests pass with it, and commits it, so the refresh installs exactly those packages.
 on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write   # to commit requirements.lock
 
 jobs:
   lock:
@@ -24,4 +24,11 @@ jobs:
           pip-compile --generate-hashes --allow-unsafe --strip-extras -q -o requirements.lock requirements.txt
           pip install --require-hashes -r requirements.lock
           python -m unittest discover -s tests
-          python3 -c 'import sys; s=open("requirements.lock").read(); print("::notice title=requirements.lock::" + s.replace("%","%25").replace("\n","%0A"))'
+      - name: Commit the lock file
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git add requirements.lock
+          if git diff --cached --quiet; then echo "No change"; exit 0; fi
+          git -c user.name="refresh-bot" -c user.email="refresh-bot@users.noreply.github.com" commit -qm "Lock dependencies"
+          git push -q "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" HEAD:main
