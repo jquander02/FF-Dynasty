@@ -68,12 +68,13 @@ def _pick_player_map(store: Store, val: dict | None = None) -> dict:
     return out
 
 
-def _package(values: list[float]) -> float:
+def _package(values: list[float], p: float | None = None) -> float:
     from .trade import package_value
-    return package_value(values)
+    return package_value(values, p)
 
 
 PLAYOFF_WEIGHT = 2.0   # a start in the winners' bracket counts double
+TITLE_WEIGHT = 3.0     # ... and triple in the champion's own playoff run
 REPL_DEFAULT = {"QB": 15.8, "RB": 8.3, "WR": 8.4, "TE": 8.1}
 DAY_LOOKBACK = 3       # days back to find the value snapshot for "on the day"
 
@@ -175,7 +176,7 @@ def trade_log(store: Store) -> list[dict]:
         return {"id": pid, "name": i["full_name"] if i else f"Player {pid}", "pos": i["position"] if i else None,
                 "nfl": i["team"] if i else None, "value": round(val.get(pid, 0.0)), "now_on": now_on.get(pid)}
 
-    # ---- banked value: starts by a roster, above replacement, playoff starts doubled
+    # ---- banked value: lineup gains over the player each start displaced, title runs weighted up
     hist = _History(store)
     k = value_per_point(store)
     repl = dict(REPL_DEFAULT)
@@ -189,53 +190,137 @@ def trade_log(store: Store) -> list[dict]:
     po_start = {r["league_id"]: r["playoff_week_start"] or 15
                 for r in store.query("SELECT league_id, playoff_week_start FROM league_season")}
     winners = defaultdict(set)
-    for r in store.query("SELECT league_id, t1, t2 FROM bracket WHERE bracket='winners'"):
+    champ = {}
+    for r in store.query("SELECT * FROM bracket WHERE bracket='winners'"):
         winners[r["league_id"]] |= {r["t1"], r["t2"]}
-    starts = defaultdict(list)    # (roster, player) -> [(season, week, points, weight)]
-    for r in store.query("SELECT league_id, week, roster_id, player_id, points FROM matchup_player WHERE is_starter=1"):
+        if r["place"] == 1 and r["winner"] is not None:
+            champ[r["league_id"]] = r["winner"]
+    pos_of = lambda pid: (info.get(pid) or {})["position"] if info.get(pid) else None  # noqa: E731
+    week_rows = defaultdict(list)   # (league, week, roster) -> [(player, points, starter)]
+    games = defaultdict(list)       # (league, player) -> [(week, points)] for weeks he scored
+    for r in store.query("SELECT league_id, week, roster_id, player_id, points, is_starter FROM matchup_player"):
         if r["league_id"] not in season_n:
             continue
-        w = PLAYOFF_WEIGHT if (r["week"] >= po_start.get(r["league_id"], 15)
-                               and r["roster_id"] in winners[r["league_id"]]) else 1.0
-        starts[(r["roster_id"], r["player_id"])].append((season_n[r["league_id"]], r["week"], r["points"] or 0.0, w))
-    # when each player left each roster: dropped by it, or sent away in a trade
-    exits = defaultdict(list)     # (roster, player) -> [(ms, (season, week), how)]
+        week_rows[(r["league_id"], r["week"], r["roster_id"])].append(
+            (r["player_id"], r["points"] or 0.0, bool(r["is_starter"])))
+        if r["points"]:
+            games[(r["league_id"], r["player_id"])].append((r["week"], r["points"]))
+    ppg_cache = {}
+
+    def ppg_before(lid, pid, w):
+        key = (lid, pid, w)
+        if key not in ppg_cache:
+            g = [p for wk, p in games.get((lid, pid), []) if wk < w]
+            ppg_cache[key] = sum(g) / len(g) if g else None
+        return ppg_cache[key]
+
+    def displaced(lid, w, rid, pid, pos):
+        """Points the team would have had without him: the same-position bench player it would
+        most likely have started (best PPG so far that season, and he played that week), or a
+        replacement-level starter when the bench had nobody that good."""
+        best = None
+        for q, pts, st in week_rows.get((lid, w, rid), []):
+            if st or q == pid or not pts or pos_of(q) != pos:
+                continue
+            pp = ppg_before(lid, q, w)
+            if pp is not None and (best is None or pp > best[0]):
+                best = (pp, pts)
+        return best[1] if best and best[0] >= repl[pos] else repl[pos]
+
+    starts = defaultdict(list)    # (roster, player) -> [(season, week, gain, weight, title season)]
+    for (lid, w, rid), rows_ in week_rows.items():
+        po = w >= po_start.get(lid, 15)
+        for pid, pts, st in rows_:
+            pos = pos_of(pid)
+            if not st or pos not in repl:
+                continue
+            title = po and champ.get(lid) == rid
+            wgt = TITLE_WEIGHT if title else PLAYOFF_WEIGHT if (po and rid in winners[lid]) else 1.0
+            gain = pts - displaced(lid, w, rid, pid, pos)
+            starts[(rid, pid)].append((season_n[lid], w, gain, wgt, season_n[lid] if title else None))
+    # when each player and pick left each roster: dropped, or sent away in a trade
+    exits = defaultdict(list)     # (roster, player) -> [(ms, (season, week), how, transaction)]
+    pick_exits = defaultdict(list)  # (roster, season, round, original roster) -> [(ms, transaction)]
     for r in store.query(
-        """SELECT m.kind, m.roster_id, m.from_roster_id, m.player_id, t.league_id, t.week,
+        """SELECT m.kind, m.roster_id, m.from_roster_id, m.player_id, m.pick_season, m.pick_round,
+                  m.pick_original_roster, t.league_id, t.week, t.transaction_id,
                   COALESCE(t.status_updated, t.created) ts, t.type
            FROM txn_move m JOIN txn t ON t.transaction_id=m.transaction_id
-           WHERE t.status='complete' AND m.player_id IS NOT NULL AND m.kind IN ('add','drop')"""):
+           WHERE t.status='complete' AND m.kind IN ('add','drop','pick')"""):
         if r["league_id"] not in season_n:
             continue
         sw = (season_n[r["league_id"]], r["week"] or 0)
-        if r["kind"] == "drop":
-            exits[(r["roster_id"], r["player_id"])].append((r["ts"] or 0, sw, "dropped"))
+        if r["kind"] == "pick":
+            if r["from_roster_id"] is not None:
+                pick_exits[(r["from_roster_id"], str(r["pick_season"]), r["pick_round"], r["pick_original_roster"])].append(
+                    (r["ts"] or 0, r["transaction_id"]))
+        elif r["player_id"] is None:
+            continue
+        elif r["kind"] == "drop":
+            exits[(r["roster_id"], r["player_id"])].append((r["ts"] or 0, sw, "dropped", None))
         elif r["from_roster_id"] is not None:
-            exits[(r["from_roster_id"], r["player_id"])].append((r["ts"] or 0, sw, "traded"))
+            exits[(r["from_roster_id"], r["player_id"])].append((r["ts"] or 0, sw, "traded", r["transaction_id"]))
+
+    # trade trees: (transaction, roster) -> what that roster got in it and the weights of what it gave.
+    # Filled newest trade first, so a later trade is always known before an earlier one needs it.
+    returns = {}
+
+    def follow(txn, rid, key):
+        """Share of a later trade's haul credited to one asset the roster sent away in it."""
+        ret = returns.get((txn, rid))
+        if not ret or key not in ret["gave"]:
+            return None
+        tot = sum(ret["gave"].values()) or 1.0
+        share = ret["gave"][key] / tot
+        return share, share * ret["got"], ret
 
     def hold(rid, pid, since_ms, since_sw):
         """Banked + remaining value of a player a roster acquired at since_ms / since_sw."""
-        pos = (info.get(pid) or {})["position"] if info.get(pid) else None
-        out_ = next((e for e in sorted(exits.get((rid, pid), [])) if e[0] > since_ms), None)
+        pos = pos_of(pid)
+        out_ = next((e for e in sorted(exits.get((rid, pid), []), key=lambda e: e[0]) if e[0] > since_ms), None)
         end_sw = out_[1] if out_ else (9999, 99)
         par = n = 0
+        titles = set()
         if pos in repl:
-            for se, wk, pts, wgt in starts.get((rid, pid), []):
+            for se, wk, gain, wgt, title in starts.get((rid, pid), []):
                 if since_sw <= (se, wk) <= end_sw:
-                    par += wgt * (pts - repl[pos])
+                    par += wgt * gain
                     n += 1
+                    if title:
+                        titles.add(title)
         banked = k * max(0.0, par)
         res = {"banked": round(banked), "banked_pts": round(max(0.0, par), 1), "starts": n}
+        if titles:
+            res["titles"] = sorted(titles)
         if out_:
             day = _day(out_[0])
-            snap = hist.after(day)
-            remain = hist.players[snap].get(pid, 0.0) if snap else val.get(pid, 0.0)
-            res["left"] = {"date": day, "how": out_[2], "valued": "then" if snap else "today"}
+            res["left"] = {"date": day, "how": out_[2]}
+            tree = follow(out_[3], rid, ("p", pid)) if out_[2] == "traded" else None
+            if tree:
+                remain = tree[1]
+                res["left"].update(valued="tree", share=round(tree[0], 3), got=tree[2]["names"])
+            else:
+                snap = hist.after(day)
+                remain = hist.players[snap].get(pid, 0.0) if snap else val.get(pid, 0.0)
+                res["left"]["valued"] = "then" if snap else "today"
         else:
             remain = val.get(pid, 0.0)
         res["remain"] = round(remain)
         res["value"] = round(banked + remain)
         return res
+
+    def pick_left(rid, key, since_ms):
+        """A pick the roster traded on later: its share of that trade's haul, or None."""
+        e = next((x for x in sorted(pick_exits.get((rid,) + key, [])) if x[0] > since_ms), None)
+        if not e:
+            return None
+        tree = follow(e[1], rid, ("k",) + key)
+        if not tree:
+            return None
+        return {"date": _day(e[0]), "how": "traded", "valued": "tree", "share": round(tree[0], 3),
+                "got": tree[2]["names"]}, tree[1]
+
+    day_scale = _DayScale(store, hist, info)
 
     def team_of(lid, rid):
         uid = owner_of.get((lid, rid))
@@ -261,6 +346,8 @@ def trade_log(store: Store) -> list[dict]:
         t_sw = (season_n.get(lid, 0), t["week"] or 0)
         t_day = _day(t_ms)
         snap_day = hist.on(t_day)
+        est = day_scale.cut(t_day) if not snap_day else None
+        keys = {}   # id(asset) -> tree key, for the trade-tree weights
         for m in moves:
             if m["kind"] == "drop" or m["roster_id"] not in idx:
                 continue
@@ -271,6 +358,9 @@ def trade_log(store: Store) -> list[dict]:
                 a.update(hold(m["roster_id"], m["player_id"], t_ms, t_sw))
                 if snap_day:
                     a["day"] = round(hist.players[snap_day].get(m["player_id"], 0.0))
+                elif est:
+                    a["day"] = day_scale.player(est, m["player_id"], pos_of(m["player_id"]))
+                keys[id(a)] = ("p", m["player_id"])
             elif m["kind"] == "pick":
                 season, rnd, orig = str(m["pick_season"]), m["pick_round"], m["pick_original_roster"]
                 _, orig_cur, orig_nm = team_of(lid, orig)
@@ -278,13 +368,17 @@ def trade_log(store: Store) -> list[dict]:
                      "orig": orig_cur, "orig_team": orig_nm.get("team")}
                 hit = used.get((season, rnd, orig))
                 fut = future.get((season, rnd, orig_cur if orig_cur is not None else orig))
+                moved = pick_left(m["roster_id"], (season, rnd, orig), t_ms)
                 if hit and hit.get("by_roster") is not None and hit["by_roster"] != m["roster_id"]:
                     # traded on before the draft: another team chose the player, so this team is
-                    # credited with what the slot was worth, not with that pick's hit or miss
+                    # credited with what it got for the pick (trade tree), else the slot's worth
                     _, by_cur, by_nm = team_of(hit["league_id"], hit["by_roster"])
                     a.update(status="flipped", pick=hit["pick"], became=player(hit["player_id"]),
                              drafted_by=by_cur, drafted_by_team=by_nm.get("team"),
-                             value=round(hit["slot_value"]))
+                             value=round(moved[1] if moved else hit["slot_value"]),
+                             today=round(hit["slot_value"]))
+                    if moved:
+                        a["left"] = moved[0]
                 elif hit:
                     b = player(hit["player_id"])
                     h = hold(m["roster_id"], hit["player_id"], hit.get("drafted_ms") or t_ms,
@@ -292,51 +386,167 @@ def trade_log(store: Store) -> list[dict]:
                     a.update(status="used", pick=hit["pick"], became=b, today=b["value"], **h)
                 elif fut:
                     a.update(status="future", exp_slot=fut["exp_slot"], value=round(fut["value"] or 0))
+                    if moved:
+                        a.update(value=round(moved[1]), left=moved[0], today=round(fut["value"] or 0))
                 else:
                     a.update(status="unknown", value=0)
                 a.setdefault("today", a["value"])
+                key = (season, rnd, orig_cur if orig_cur is not None else orig)
                 if snap_day:
-                    key = (season, rnd, orig_cur if orig_cur is not None else orig)
                     if key in hist.picks.get(snap_day, {}):
                         a["day"] = round(hist.picks[snap_day][key])
+                elif est:
+                    a["day"] = day_scale.pick(est, rnd, hit["pick"] if hit and int(season) == est[0] and est[1] <= 0
+                                              else None)
+                keys[id(a)] = ("k", season, rnd, orig)
             elif m["kind"] == "faab":
                 a = {"k": "faab", "from": frm, "amount": m["amount"], "value": 0}
             else:
                 continue
             sides[idx[m["roster_id"]]]["got"].append(a)
+        # what each roster got and gave here, for earlier trades whose assets came through it
+        for rid, i in idx.items():
+            got = [a for a in sides[i]["got"] if a["k"] != "faab"]
+            gave = {}
+            for o in sides:
+                for a in o["got"]:
+                    if a.get("from") == i and a["k"] != "faab":
+                        w = a.get("day") if a.get("day") is not None else a.get("today", a["value"])
+                        gave[keys[id(a)]] = gave.get(keys[id(a)], 0.0) + max(1.0, w or 0.0)
+            returns[(t["transaction_id"], rid)] = {
+                "got": float(sum(a["value"] for a in got)), "gave": gave,
+                "names": [x["name"] if x["k"] == "player" else f"{x['season']} round {x['round']}"
+                          for x in sorted(got, key=lambda x: -x["value"])][:3]}
+        rec = {"id": t["transaction_id"], "season": leagues.get(lid), "week": t["week"],
+               "ts": t["status_updated"] or t["created"], "sides": sides}
+        assets = [a for sd in sides for a in sd["got"] if a["k"] != "faab"]
+        if assets and all(a.get("day") is not None for a in assets):
+            rec["day"] = {"date": snap_day or t_day, "est": bool(est)}
+            if est:
+                for a in assets:
+                    a["day_est"] = True
+        out.append(rec)
+
+    # package math: fit the exponent to how this league prices 2-for-1s, then judge every trade
+    fit = fit_package(out)
+    P = fit["p"]
+    for rec in out:
+        sides = rec["sides"]
         for i, sd in enumerate(sides):
             got = [a["value"] for a in sd["got"] if a["k"] != "faab"]
             gave = [a["value"] for o in sides for a in o["got"] if a.get("from") == i and a["k"] != "faab"]
-            sd["got_value"] = round(_package(got))
+            sd["got_value"] = round(_package(got, P))
             sd["got_raw"] = round(sum(got))
-            sd["gave_value"] = round(_package(gave))
+            sd["gave_value"] = round(_package(gave, P))
             sd["net"] = sd["got_value"] - sd["gave_value"]
-        for sd in sides:
             sd["banked"] = sum(a.get("banked", 0) for a in sd["got"])
         big = max([sd["got_value"] for sd in sides] + [1])
         even = all(abs(sd["net"]) <= 0.10 * big for sd in sides)
         best = max(range(len(sides)), key=lambda i: sides[i]["net"]) if sides else None
-        rec = {
-            "id": t["transaction_id"], "season": leagues.get(lid), "week": t["week"],
-            "ts": t["status_updated"] or t["created"], "sides": sides,
-            "even": even, "winner": None if even or best is None else best,
-            "margin": 0 if best is None else sides[best]["net"],
-        }
-        # on the day: every asset needs a value from that day's snapshot
-        assets = [a for sd in sides for a in sd["got"] if a["k"] != "faab"]
-        if snap_day and assets and all("day" in a for a in assets):
+        rec.update(even=even, winner=None if even or best is None else best,
+                   margin=0 if best is None else sides[best]["net"])
+        if "day" in rec:
             for i, sd in enumerate(sides):
-                sd["day_got"] = round(_package([a["day"] for a in sd["got"] if a["k"] != "faab"]))
+                sd["day_got"] = round(_package([a["day"] for a in sd["got"] if a["k"] != "faab"], P))
                 sd["day_gave"] = round(_package([a["day"] for o in sides for a in o["got"]
-                                                 if a.get("from") == i and a["k"] != "faab"]))
+                                                 if a.get("from") == i and a["k"] != "faab"], P))
                 sd["day_net"] = sd["day_got"] - sd["day_gave"]
             dbig = max([sd["day_got"] for sd in sides] + [1])
             deven = all(abs(sd["day_net"]) <= 0.10 * dbig for sd in sides)
             dbest = max(range(len(sides)), key=lambda i: sides[i]["day_net"])
-            rec.update(day={"date": snap_day, "even": deven, "winner": None if deven else dbest,
-                            "margin": sides[dbest]["day_net"]})
-        out.append(rec)
+            rec["day"].update(even=deven, winner=None if deven else dbest, margin=sides[dbest]["day_net"])
+    store.snapshot("package_fit", fit)
     return out
+
+
+PKG_DEFAULT = 1.3
+PKG_GRID = [round(1.0 + 0.05 * i, 2) for i in range(21)]   # 1.0 .. 2.0
+PKG_PRIOR_N = 20     # trades' worth of weight on the default when shrinking the fit
+
+
+def fit_package(log: list[dict]) -> dict:
+    """The package exponent P that makes this league's two-team trades most even at the values of
+    their day: trades are assumed fair on average, so the best P is the one that minimizes the
+    squared log gap between the two sides' packages. Only trades with 2+ pieces on a side say
+    anything about P. The fit is shrunk toward 1.3 (PKG_PRIOR_N trades' worth) and kept in 1.0-2.0."""
+    from .trade import package_value
+    samples = []
+    for tr in log:
+        if "day" not in tr or len(tr["sides"]) != 2:
+            continue
+        a, b = ([x["day"] for x in sd["got"] if x["k"] != "faab" and x["day"] > 0] for sd in tr["sides"])
+        if not a or not b or max(len(a), len(b)) < 2:
+            continue
+        samples.append((a, b))
+    if not samples:
+        return {"p": PKG_DEFAULT, "fit": None, "trades": 0}
+    import math
+
+    def err(p):
+        return sum((math.log(package_value(a, p)) - math.log(package_value(b, p))) ** 2 for a, b in samples)
+
+    raw = min(PKG_GRID, key=err)
+    n = len(samples)
+    p = round(PKG_DEFAULT + (raw - PKG_DEFAULT) * n / (n + PKG_PRIOR_N), 2)
+    return {"p": p, "fit": raw, "trades": n,
+            "gap_default": round(math.sqrt(err(PKG_DEFAULT) / n), 3), "gap_fit": round(math.sqrt(err(raw) / n), 3)}
+
+
+class _DayScale:
+    """'On the day' values for trades older than the value history: the model as of that day
+    (dayvalues.model_value_asof), mapped by rank onto the blended values of the oldest snapshot.
+    Picks use the oldest pick values of their round (the slot's value once the order was set)."""
+
+    def __init__(self, store: Store, hist: "_History", info: dict):
+        from . import dayvalues
+        self.dv = dayvalues
+        self.first = hist.dates[0] if hist.dates else None
+        self.by_cut = defaultdict(dict)
+        if self.first and store.query("SELECT 1 FROM sqlite_master WHERE name='model_value_asof'"):
+            for r in store.query("SELECT cut, player_id, model_value FROM model_value_asof"):
+                self.by_cut[r["cut"]][r["player_id"]] = r["model_value"] or 0.0
+        base = hist.players.get(self.first, {}) if self.first else {}
+        self.base = base
+        self.curve = sorted((v for p, v in base.items() if info.get(p) and info[p]["position"] in SKILL), reverse=True)
+        self.scaled = {}
+        self.rounds = defaultdict(list)
+        picks = hist.picks.get(self.first, {}) if self.first else {}
+        if picks:
+            yr = min(s for s, _, _ in picks)
+            for (s, rnd, _), v in picks.items():
+                if s == yr:
+                    self.rounds[rnd].append(v)
+            for rnd in self.rounds:
+                self.rounds[rnd].sort(reverse=True)
+
+    def cut(self, day: str | None):
+        """(season, weeks) for a day before the value history, when its model values exist."""
+        if not day or not self.first or day >= self.first:
+            return None
+        c = self.dv.cut_for(day)
+        return c if self.dv.cut_key(c) in self.by_cut else None
+
+    def player(self, cut, pid, pos) -> int:
+        key = self.dv.cut_key(cut)
+        if key not in self.scaled:
+            order = sorted(self.by_cut[key].items(), key=lambda x: -x[1])
+            self.scaled[key] = {p: (self.curve[i] if i < len(self.curve) and mv > 0 else 0.0)
+                                for i, (p, mv) in enumerate(order)}
+        sc = self.scaled[key]
+        if pid in sc:
+            return round(sc[pid])
+        if pos not in SKILL:
+            return 0
+        return round(self.base.get(pid, 0.0))   # not in that day's model (no id match): oldest value
+
+    def pick(self, cut, rnd, slot: str | None) -> int:
+        vals = self.rounds.get(rnd) or []
+        if not vals:
+            return 0
+        if slot:   # the draft order was set: that slot's value
+            i = int(str(slot).split(".")[-1]) - 1
+            return round(vals[min(max(i, 0), len(vals) - 1)])
+        return round(sum(vals) / len(vals))
 
 
 DYNASTY_TYPES = (1, 2)   # Sleeper league type: 0 redraft, 1 keeper, 2 dynasty
@@ -593,7 +803,12 @@ def build(store: Store) -> dict:
                 elif a["k"] == "player" and a.get("pos") in SKILL:
                     p["acq_pos"][a["pos"]] += 1
     reviews = [{"transaction_id": tr["id"], "season": tr["season"], "week": tr["week"], "ts": tr["ts"],
-                "even": int(tr["even"]), "winner": tr["winner"], "margin": tr["margin"], "sides": json.dumps(tr["sides"])} for tr in log]
+                "even": int(tr["even"]), "winner": tr["winner"], "margin": tr["margin"], "sides": json.dumps(tr["sides"]),
+                "day": json.dumps(tr.get("day"))} for tr in log]
+    fit = store.query("SELECT body FROM raw_snapshot WHERE endpoint='package_fit'")
+    if fit:   # the trade lab and finder price packages with the league's own exponent
+        from . import trade as trade_mod
+        trade_mod.P = json.loads(fit[0]["body"]).get("p") or trade_mod.P
     for t in store.query("SELECT * FROM txn WHERE status='complete' ORDER BY COALESCE(status_updated, created)"):
         lid = t["league_id"]
         moves = store.query("SELECT * FROM txn_move WHERE transaction_id=?", (t["transaction_id"],))

@@ -34,13 +34,14 @@ FAIR = 0.10
 CONTEND = ("Dynasty power", "Win now")
 
 
-def package_value(values: list[float]) -> float:
+def package_value(values: list[float], p: float | None = None) -> float:
+    p = p or P
     vals = [max(0.0, v or 0.0) for v in values]
     if not vals:
         return 0.0
     if len(vals) == 1:
         return vals[0]
-    return sum(v ** P for v in vals) ** (1 / P)
+    return sum(v ** p for v in vals) ** (1 / p)
 
 
 @dataclass

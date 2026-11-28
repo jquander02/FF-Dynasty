@@ -211,6 +211,7 @@ class Phase4PipelineTest(Phase3PipelineTest):
         lid = self.q("SELECT league_id FROM league_season WHERE is_current=1")[0]["league_id"]
         self.store.conn.execute("UPDATE league_season SET playoff_week_start=15 WHERE league_id=?", (lid,))
         self.store.conn.execute("DELETE FROM matchup_player WHERE player_id='6794'")
+        self.store.conn.execute("DELETE FROM matchup_player WHERE is_starter=0")   # no bench: gains over replacement
         rows = [(7, 2, 40.0), (MY_ROSTER, 3, 30.0), (MY_ROSTER, 4, 20.0), (MY_ROSTER, 15, 25.0), (MY_ROSTER, 16, 50.0)]
         self.store.upsert("matchup_player", [{"league_id": lid, "week": w, "roster_id": r, "player_id": "6794",
                                               "points": p, "is_starter": 1} for r, w, p in rows])
@@ -252,6 +253,112 @@ class Phase4PipelineTest(Phase3PipelineTest):
         self.assertEqual(mine["day_got"], 9000)
         self.assertGreater(mine["day_net"], 0)
         self.assertEqual(tr["day"]["winner"], [s["roster_id"] for s in tr["sides"]].index(MY_ROSTER))
+
+    # ---- trade evaluation upgrades -----------------------------------------------------------
+    def _jefferson(self, rows):
+        lid = self.q("SELECT league_id FROM league_season WHERE is_current=1")[0]["league_id"]
+        self.store.conn.execute("UPDATE league_season SET playoff_week_start=15 WHERE league_id=?", (lid,))
+        self.store.conn.execute("DELETE FROM matchup_player WHERE roster_id=?", (MY_ROSTER,))
+        self.store.upsert("matchup_player", [{"league_id": lid, "week": w, "roster_id": MY_ROSTER, "player_id": pid,
+                                              "points": p, "is_starter": st} for pid, w, p, st in rows])
+        self.store.commit()
+        return lid
+
+    def _mine(self, tid="t-trade-1"):
+        tr = [t for t in owners.trade_log(self.store) if t["id"] == tid][0]
+        side = [s for s in tr["sides"] if s["roster_id"] == MY_ROSTER][0]
+        return tr, side
+
+    def test_gain_over_displaced_bench_player(self):
+        """A start is worth his points over the bench player who'd have started instead: the
+        same-position backup with the best PPG so far (if he's at least replacement level)."""
+        self.store.upsert("player", [{"player_id": "bwr", "full_name": "Bench Guy", "position": "WR"}])
+        self._jefferson([("bwr", 2, 30.0, 1), ("6794", 4, 25.0, 1), ("bwr", 4, 18.0, 0)])
+        _, mine = self._mine()
+        jj = [a for a in mine["got"] if a["k"] == "player"][0]
+        self.assertEqual(jj["starts"], 1)
+        self.assertAlmostEqual(jj["banked_pts"], 25.0 - 18.0, places=1)   # not 25 - replacement
+
+    def test_title_run_counts_triple(self):
+        lid = self._jefferson([("6794", 15, 20.0, 1), ("6794", 16, 20.0, 1)])
+        self.store.conn.execute("DELETE FROM matchup_player WHERE is_starter=0")
+        self.store.upsert("bracket", [{"league_id": lid, "bracket": "winners", "round": 3, "matchup": 1,
+                                       "t1": MY_ROSTER, "t2": 7, "winner": MY_ROSTER, "loser": 7, "place": 1}])
+        self.store.commit()
+        _, mine = self._mine()
+        jj = [a for a in mine["got"] if a["k"] == "player"][0]
+        wr = owners.REPL_DEFAULT["WR"]
+        proj = self.q("SELECT MAX(repl_ppg) r FROM player_projection WHERE position='WR'")
+        if proj and proj[0]["r"]:
+            wr = proj[0]["r"]
+        self.assertAlmostEqual(jj["banked_pts"], round(2 * owners.TITLE_WEIGHT * (20 - wr), 1), places=1)
+        self.assertEqual(jj["titles"], [2026])
+
+    def test_trade_tree(self):
+        """When I trade Jefferson on, he's worth his share of what that later trade brought back."""
+        lid = self._jefferson([])
+        self.store.upsert("player", [{"player_id": "zz", "full_name": "Later Get", "position": "RB"}])
+        vd = self.q("SELECT MAX(snapshot_date) d FROM player_value")[0]["d"]
+        self.store.upsert("player_value", [{"snapshot_date": vd, "player_id": "zz", "value": 4321}])
+        self.store.upsert("txn", [{"transaction_id": "t-later", "league_id": lid, "season": "2026", "week": 6,
+                                   "type": "trade", "status": "complete", "created": 1795000000000,
+                                   "status_updated": 1795000000000, "roster_ids": json.dumps([MY_ROSTER, 9])}])
+        self.store.upsert("txn_move", [
+            {"transaction_id": "t-later", "seq": 0, "kind": "add", "roster_id": 9, "from_roster_id": MY_ROSTER, "player_id": "6794"},
+            {"transaction_id": "t-later", "seq": 1, "kind": "drop", "roster_id": MY_ROSTER, "player_id": "6794"},
+            {"transaction_id": "t-later", "seq": 2, "kind": "add", "roster_id": MY_ROSTER, "from_roster_id": 9, "player_id": "zz"},
+            {"transaction_id": "t-later", "seq": 3, "kind": "drop", "roster_id": 9, "player_id": "zz"}])
+        self.store.commit()
+        _, mine = self._mine()
+        jj = [a for a in mine["got"] if a["k"] == "player"][0]
+        self.assertEqual(jj["left"]["valued"], "tree")
+        self.assertEqual(jj["left"]["share"], 1.0)
+        self.assertEqual(jj["left"]["got"], ["Later Get"])
+        self.assertEqual(jj["remain"], 4321)
+
+    def test_day_estimate_from_model_asof(self):
+        """A trade before the value history is judged at that day's model ranks, mapped onto the
+        oldest snapshot's values."""
+        from dynasty import dayvalues
+        day = owners._day(1790000100000)
+        first = "2030-01-01"
+        self.store.upsert("player_value", [{"snapshot_date": first, "player_id": "6794", "value": 8000},
+                                           {"snapshot_date": first, "player_id": "7001", "value": 5000}])
+        self.store.conn.execute("CREATE TABLE IF NOT EXISTS model_value_asof (cut TEXT, player_id TEXT, gsis_id TEXT, "
+                                "model_value REAL, PRIMARY KEY (cut, player_id))")
+        key = dayvalues.cut_key(dayvalues.cut_for(day))
+        # on that day the model ranked 7001 above Jefferson
+        self.store.upsert("model_value_asof", [{"cut": key, "player_id": "7001", "model_value": 300},
+                                               {"cut": key, "player_id": "6794", "model_value": 200}])
+        self.store.conn.execute("DELETE FROM player_value WHERE snapshot_date<?", (first,))
+        self.store.upsert("player_value", [{"snapshot_date": first, "player_id": "6794", "value": 8000}])
+        self.store.commit()
+        tr, mine = self._mine()
+        jj = [a for a in mine["got"] if a["k"] == "player"][0]
+        theirs = [s for s in tr["sides"] if s["roster_id"] == 7][0]
+        p7001 = [a for a in theirs["got"] if a["k"] == "player"][0]
+        self.assertTrue(tr["day"]["est"])
+        self.assertTrue(jj["day_est"])
+        self.assertEqual(p7001["day"], 8000)   # top-ranked that day: the top value in the curve
+        self.assertEqual(jj["day"], 5000)
+
+    def test_cut_for(self):
+        from dynasty import dayvalues
+        self.assertEqual(dayvalues.cut_for("2026-03-10"), (2026, -1))   # before the NFL draft
+        self.assertEqual(dayvalues.cut_for("2026-06-01"), (2026, 0))
+        self.assertEqual(dayvalues.cut_for("2025-09-09"), (2025, 1))    # week 1 done (kickoff Sep 4)
+        self.assertEqual(dayvalues.cut_for("2025-11-25"), (2025, 12))
+
+    def test_fit_package(self):
+        # two pieces of 500 traded for one 800 again and again: P where 500+500 packages to 800
+        log = [{"day": {}, "sides": [{"got": [{"k": "player", "day": 500}, {"k": "player", "day": 500}]},
+                                     {"got": [{"k": "player", "day": 800}]}]} for _ in range(200)]
+        fit = owners.fit_package(log)
+        self.assertEqual(fit["trades"], 200)
+        self.assertAlmostEqual(fit["fit"], 1.5, delta=0.05)                 # 2^(1/1.5) = 1.59 ~ 1.6
+        self.assertGreater(fit["p"], owners.PKG_DEFAULT)
+        self.assertLess(fit["p"], fit["fit"] + 1e-9)                         # shrunk toward 1.3
+        self.assertEqual(owners.fit_package([])["p"], owners.PKG_DEFAULT)
 
 
 if __name__ == "__main__":

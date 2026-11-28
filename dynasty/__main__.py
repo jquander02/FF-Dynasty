@@ -11,7 +11,7 @@ import logging
 import sys
 import time
 
-from . import export, idmap, ingest_sleeper, market, model, nflverse, owners, picks, production, teams, trade, values, weekly, schedule
+from . import dayvalues, export, idmap, ingest_sleeper, market, model, nflverse, owners, picks, production, teams, trade, values, weekly, schedule
 from .config import load_config
 from .sleeper import SleeperClient
 from .store import Store
@@ -102,6 +102,12 @@ def main(argv: list[str] | None = None) -> int:
                     print("Schedule: " + ", ".join(f"{k} {v}" for k, v in sch.items()))
                 except Exception as exc:  # noqa: BLE001 - never block the refresh
                     logging.getLogger("dynasty").warning("schedule build failed: %s", exc, exc_info=True)
+                if not args.quick:
+                    try:   # model values as of old trade dates, for "on the day" before the value history
+                        dv = dayvalues.build(store)
+                        print("Day values: " + ", ".join(f"{k} {v}" for k, v in dv.items()))
+                    except Exception as exc:  # noqa: BLE001 - never block the refresh
+                        logging.getLogger("dynasty").warning("day values failed: %s", exc, exc_info=True)
                 ow = owners.build(store)
                 print("Owners: " + ", ".join(f"{k} {v}" for k, v in ow.items()))
                 sug = trade.find_trades_all(store)

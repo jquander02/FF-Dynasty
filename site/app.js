@@ -775,14 +775,17 @@
   }
 
   // ---------------------------------------------------------------- Trade lab
-  // Mirrors dynasty/trade.py: package value (sum v^1.3)^(1/1.3); best-lineup PPG for 3 horizons.
-  const PKG = 1.3, FAIR = 0.10;
+  // Mirrors dynasty/trade.py: package value (sum v^P)^(1/P), P fitted to this league's trades
+  // (owners.fit_package, 1.3 by default); best-lineup PPG for 3 horizons.
+  const FAIR = 0.10;
+  const pkgP = () => D.meta?.package?.p || 1.3;
   const FLEX = { FLEX: ["RB", "WR", "TE"], SUPER_FLEX: ["QB", "RB", "WR", "TE"], REC_FLEX: ["WR", "TE"], WRRB_FLEX: ["WR", "RB"] };
   const pkgValue = (vals) => {
     const v = vals.map((x) => Math.max(0, x || 0));
     if (!v.length) return 0;
     if (v.length === 1) return v[0];
-    return Math.pow(v.reduce((a, x) => a + Math.pow(x, PKG), 0), 1 / PKG);
+    const P = pkgP();
+    return Math.pow(v.reduce((a, x) => a + Math.pow(x, P), 0), 1 / P);
   };
   function bestLineup(players, h) {
     const slots = D.meta?.settings?.roster_positions || [];
@@ -824,12 +827,44 @@
     const afterA = swap(aP, state.give, bP.filter((p) => state.get.has(p.id)));
     const afterB = swap(bP, state.get, aP.filter((p) => state.give.has(p.id)));
     const delta = (before, after) => [0, 1, 2].map((h) => +(bestLineup(after, h) - bestLineup(before, h)).toFixed(1));
-    const big = Math.max(ga, ta, 1), diff = ta - ga;
+    // roster spots: a side that ends up over the active-roster limit must cut its lowest-valued players
+    const cutA = rosterCut(aP, state.give, bP.filter((p) => state.get.has(p.id)));
+    const cutB = rosterCut(bP, state.get, aP.filter((p) => state.give.has(p.id)));
+    const getNet = ta - cutA.cost, giveNet = ga - cutB.cost;   // what each side really adds
+    const big = Math.max(ga, ta, 1), diff = getNet - giveNet;
+    // worth to each team: this season's part of a value weighed by playoff odds, later seasons by window
+    const worth = (t, keys) => pkgValue([...keys].map((k) => assetWorth(k, teamWeights(t))));
+    const tA = teamOf(a), tB = teamOf(b);
+    const wA = { got: worth(tA, state.get) - cutA.cost, gave: worth(tA, state.give) };
+    const wB = { got: worth(tB, state.give) - cutB.cost, gave: worth(tB, state.get) };
     return {
       giveRaw: gv.reduce((x, y) => x + y, 0), getRaw: tv.reduce((x, y) => x + y, 0), giveAdj: ga, getAdj: ta, diff,
       verdict: Math.abs(diff) <= FAIR * big ? "fair" : diff > 0 ? "win" : "lose",
-      a: delta(aP, afterA), b: delta(bP, afterB),
+      a: delta(aP, afterA), b: delta(bP, afterB), cutA, cutB, wA, wB,
     };
+  }
+  const ROSTER_MAX = () => (D.meta?.settings?.roster_positions || []).length;
+  function rosterCut(before, out, inn) {
+    const active = (p) => p.slot !== "taxi" && p.slot !== "reserve";
+    const now = before.filter(active);
+    const after = now.filter((p) => !out.has(p.id)).concat(inn);
+    const n = ROSTER_MAX() ? Math.max(0, after.length - Math.max(ROSTER_MAX(), now.length)) : 0;
+    if (!n) return { n: 0, cost: 0, players: [] };
+    const players = after.filter((p) => SKILLPOS.includes(p.pos) && !inn.includes(p))
+      .sort((x, y) => (x.val || 0) - (y.val || 0)).slice(0, n);
+    return { n, cost: players.reduce((x, p) => x + (p.val || 0), 0), players };
+  }
+  // A team's weights: this season's value counts by its playoff odds (0.4 out of it, 1.6 a lock),
+  // later seasons a little more for rebuilders and a little less for teams going for it.
+  function teamWeights(t) {
+    const key = (D.plan || {})[t?.roster_id]?.strategy?.key;
+    return { now: 0.4 + 1.2 * (t?.p_playoffs || 0), later: ["reload", "rebuild"].includes(key) ? 1.1 : ["sustain", "allin", "run"].includes(key) ? 0.9 : 1 };
+  }
+  function assetWorth(k, w) {
+    const pk = pickByKey(k);
+    if (pk) return (pk.value || 0) * w.later;
+    const p = byId[k] || {}, s = p.now ?? 0;
+    return (p.val || 0) * (w.now * s + w.later * (1 - s));
   }
   function assetList(rid, set, side) {
     const sel = (k) => (set.has(k) ? 1 : 0);
@@ -1012,6 +1047,9 @@
           <tbody><tr><td>${teamHTML(A.roster_id)}</td>${ev.a.map((x) => `<td class="num ${signCls(x)}">${sgn(x)}</td>`).join("")}</tr>
                  <tr><td>${teamHTML(B.roster_id)}</td>${ev.b.map((x) => `<td class="num ${signCls(x)}">${sgn(x)}</td>`).join("")}</tr></tbody></table>
         <p class="note">${fit(A, ev.a)} ${fit(B, ev.b)}</p>
+        ${[[A, ev.cutA], [B, ev.cutB]].filter(([, c]) => c.n).map(([t, c]) => `<p class="note cut-note"><b>Roster spots:</b> ${esc(t.team)} ends up ${plural(c.n, "player")} over the limit and would cut ${c.players.map((p) => `${esc(p.name)} (${fmt(p.val || 0)})`).join(", ")}; that's taken off what they get.</p>`).join("")}
+        <table class="mini worth"><thead><tr><th>Worth to each team</th><th class="num">Gets</th><th class="num">Gives</th><th class="num">Net</th></tr></thead>
+          <tbody>${[[A, ev.wA], [B, ev.wB]].map(([t, w]) => `<tr><td>${teamHTML(t.roster_id)}</td><td class="num">${fmt(Math.max(0, w.got))}</td><td class="num">${fmt(w.gave)}</td><td class="num ${signCls(w.got - w.gave)}">${signed(Math.round(w.got - w.gave))}</td></tr>`).join("")}</tbody></table>
         ${(() => {
           const od = tradeOdds(A.roster_id, B.roster_id);
           if (!od) return "";
@@ -1068,7 +1106,8 @@
         </div>`).join("") || `<div class="empty">No fair deals found${A ? " for this team" : ""}.</div>`}</div>
       ${selected ? `<button class="tray" type="button" data-totop="1"><span>${esc(A?.team || "Team A")} <b>${fmt(pkgValue([...state.give].map(assetValue)))}</b>, ${esc(B?.team || "Team B")} <b>${fmt(pkgValue([...state.get].map(assetValue)))}</b></span><span>${A && B ? "See result" : "Choose teams"}</span></button>` : ""}
       ${how("How trades are judged", [
-        `A package is worth less than the sum of its parts: two equal players count as about 1.7 of one, because only so many players start. A trade is fair within 10%.`,
+        `A package is worth less than the sum of its parts, because only so many players start: two equal players count as ${f1(Math.pow(2, 1 / pkgP()))} of one. That rate is fitted to this league's own trades${D.meta?.package?.trades ? ` (${D.meta.package.trades} trades with two or more pieces on a side, at the values of their day)` : ""}. A trade is fair within 10%. A side that ends up over the roster limit loses the value of the players it would have to cut.`,
+        `Worth to each team weighs each player's value by when it comes: the part from this season counts by the team's playoff odds (from 0.4 for a team that's out to 1.6 for a lock), later seasons count a little more for rebuilding teams and a little less for teams going for it. Picks are all later value. The same trade can help both teams.`,
         `This-season odds come from ${SIM_N.toLocaleString()} simulated seasons, player by player: each week every player plays or not (byes, injuries), each team starts its best available players, and each starter's score varies around his projection. The trade is applied and the same seasons replayed, so the change in playoff and title odds is the trade's effect.`,
         `Lineup change compares each team's best possible starting lineup before and after, in points per week: now (injured players left out), next season, and in two seasons.`,
         `Suggestions are worked out for every team: fair deals that move the team toward its window and help the partner's. Teams chasing the playoffs must get better now, everyone else over the next two seasons.`,
@@ -1308,7 +1347,7 @@
   const TRADE_VIEWS = [
     ["total", "Results so far", "What each team got out of the trade: points its new players scored in its starting lineup, plus the value they have left (or had when the team moved them on)."],
     ["today", "Today's value", "Everything each team got, at today's values, wherever those players are now."],
-    ["day", "On the day", "Everything at the values of the day the trade was made: was it fair when it was struck? Only trades from October 16, 2026 on."],
+    ["day", "On the day", "Everything at the values of the day the trade was made: was it fair when it was struck? Trades before October 2026 use the model's rankings from that day (marked estimated)."],
   ];
   const involves = (tr, rid) => tr.sides.some((sd) => sd.roster_id === rid);
   const sideOf = (tr, rid) => tr.sides.findIndex((sd) => sd.roster_id === rid);
@@ -1316,7 +1355,7 @@
   const tradeDate = (tr) => (tr.ts ? new Date(tr.ts).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "");
   const signed = (x) => `${x > 0 ? "+" : x < 0 ? "−" : ""}${fmt(Math.abs(x))}`;
   const assetVal = (a, view) => (a.k === "faab" ? null : view === "today" ? (a.today ?? a.value) : view === "day" ? a.day : a.value);
-  const pkgSum = (vals) => Math.pow(vals.reduce((x, v) => x + Math.pow(Math.max(0, v), PKG), 0), 1 / PKG);
+  const pkgSum = (vals) => pkgValue(vals.length === 1 ? [Math.max(0, vals[0])] : vals);
   // Judge a trade under one view: per side got/gave/net, plus even/winner/margin. null if values are missing.
   const judged = new Map();
   function judge(tr, view) {
@@ -1358,24 +1397,28 @@
     if (a.k === "faab") {
       return `<div class="past-row"><span class="dot PK">$</span><span><span class="aname">$${fmt(a.amount)} FAAB</span><span class="meta"><span>not counted in value</span></span></span><span class="aval muted">–</span></div>`;
     }
-    const starts = view === "total" && a.starts ? `, ${plural(a.starts, "start")} for them` : "";
+    const starts = view === "total" ? [
+      a.starts ? `, ${plural(a.starts, "start")} for them` : "",
+      a.titles?.length ? ` <span class="title-badge" title="Started in their title run">Title ${a.titles.join(", ")}</span>` : "",
+      a.left?.valued === "tree" ? `, traded on for ${esc((a.left.got || []).join(", ") || "something")}${a.left.share < 0.995 ? ` (${pct(a.left.share)} of that haul)` : ""}` : "",
+    ].join("") : view === "day" && a.day_est ? ", estimated" : "";
     if (a.k === "player") {
       return row(a.id, `<span class="dot ${esc(a.pos || "")}">${esc(a.pos || "?")}</span>`, esc(a.name), `${whereNow(a.now_on, receiver)}${starts}`);
     }
     const owner = a.orig_team ? `${esc(a.orig_team)}${/s$/i.test(a.orig_team) ? "'" : "'s"} pick` : "pick";
     const name = `${a.season} round ${a.round}${a.pick ? ` <span class="slotno">${esc(a.pick)}</span>` : ""}`;
     const dot = `<span class="dot PK">PK</span>`;
-    if (view === "day") return row(null, dot, name, `${owner}, before the draft`, "pick");
+    if (view === "day") return row(null, dot, name, `${owner}, before the draft${a.day_est ? ", estimated" : ""}`, "pick");
     const b = a.became || {};
     if (a.status === "flipped") {
       const by = a.drafted_by != null ? esc(teamOf(a.drafted_by)?.team || a.drafted_by_team || "another team") : esc(a.drafted_by_team || "another team");
-      return row(null, dot, name, `${owner}, passed on before the draft (${by} took ${esc(b.name || "?")}); valued as the slot`, "pick");
+      return row(null, dot, name, `${owner}, passed on before the draft (${by} took ${esc(b.name || "?")}); ${a.left?.valued === "tree" && view === "total" ? `traded on for ${esc((a.left.got || []).join(", "))}${a.left.share < 0.995 ? ` (${pct(a.left.share)} of that haul)` : ""}` : "valued as the slot"}`, "pick");
     }
     if (a.status === "used" || a.became) {
       return row(b.id, dot, `${name} <span class="muted">became</span> ${esc(b.name || "?")}`, `${owner}, ${whereNow(b.now_on, receiver)}${starts}`, "pick");
     }
     return row(null, dot, name, a.status === "future"
-      ? `${owner}, not drafted yet${a.exp_slot ? `, projected ${slotLabel(a.round, a.exp_slot)}` : ""}`
+      ? `${owner}, not drafted yet${a.exp_slot ? `, projected ${slotLabel(a.round, a.exp_slot)}` : ""}${a.left?.valued === "tree" && view === "total" ? `; traded on for ${esc((a.left.got || []).join(", "))}` : ""}`
       : `${owner}, player taken not found`, "pick");
   }
   function tradeCard(tr, focus, view) {
@@ -1393,7 +1436,7 @@
     }
     return `
       <article class="tcard">
-        <header><span><b>${tr.season}${tr.week ? `, week ${tr.week}` : ""}</b> <span class="muted">${tradeDate(tr)}</span></span>${verdict}</header>
+        <header><span><b>${tr.season}${tr.week ? `, week ${tr.week}` : ""}</b> <span class="muted">${tradeDate(tr)}${view === "day" && tr.day?.est ? ", values estimated" : ""}</span></span>${verdict}</header>
         <div class="tsides" style="--n:${tr.sides.length}">
           ${order.map((i) => {
             const sd = tr.sides[i], js = j.sides[i];
@@ -1451,7 +1494,7 @@
       ]);
     }
     const empty = view === "day" && !all.length
-      ? `<div class="empty"><b>No trades to judge yet</b>Values have been saved daily since October 16, 2026. Trades made from then on show here.</div>`
+      ? `<div class="empty"><b>No trades to judge yet</b>Values from the day of each trade aren't ready yet. They fill in after the next full refresh.</div>`
       : `<div class="empty"><b>No trades</b>${tid != null ? "This team hasn't made a trade" : "No trades yet"}${wid != null ? " with that team" : ""}.</div>`;
     return `
       <div class="controls">
@@ -1468,10 +1511,11 @@
       ${summary}
       <div class="tlist">${list.map((tr) => tradeCard(tr, tid, view)).join("") || empty}</div>
       ${how("How past trades are judged", [
-        `<b>Results so far</b> counts what each team actually got out of the deal. For each player: the points he scored in that team's starting lineup after the trade, above a replacement starter at his position (playoff starts count double), turned into value at the rate the model uses; plus the value he has left, or had on the day the team traded or dropped him. A player who retires keeps what he banked, so trading for an aging star isn't marked as a loss once he's done.`,
-        `<b>Today's value</b> counts everything at today's values, wherever the players are now. <b>On the day</b> uses the values saved on the day of the trade (daily since October 16, 2026), which shows whether the deal was fair when it was made.`,
-        `Draft picks: a pick a team used counts as the player it took. A pick a team passed on before the draft counts at what that slot turned out to be worth (players taken within three picks of it), since another team made the choice. A pick not yet used counts at its pick value.`,
-        `Each side's haul is combined as in the trade lab: two equal pieces count as about 1.7 of one. A trade is even when every side is within 10%. FAAB is shown but not valued.`,
+        `<b>Results so far</b> counts what each team actually got out of the deal. For each player: what his starts added to that team's lineup after the trade, compared with the player he pushed to the bench (the backup at his position with the best average so far that season, or a replacement-level starter if the bench had nobody that good), turned into value at the rate the model uses. Playoff starts count double, and starts in the champion's title run count triple (marked "Title").`,
+        `Then what he's still worth: today's value while he's on the team. If the team traded him on, he's worth his share of what that later trade brought back (and so on down the chain), so a player flipped for a star gets credit for the star. If the team dropped him, his value on the day he was dropped. A player who retires keeps what he banked, so trading for an aging star isn't marked as a loss once he's done.`,
+        `<b>Today's value</b> counts everything at today's values, wherever the players are now. <b>On the day</b> uses the values saved on the day of the trade, which shows whether the deal was fair when it was made. Values have been saved daily since October 2026; for older trades the model is re-run with only the data that existed that day, and each player gets the value of his rank that day on today's scale (marked estimated). Picks in older trades use the average value of picks in that round, or the slot's value once the draft order was set.`,
+        `Draft picks: a pick a team used counts as the player it took. A pick a team passed on before the draft counts as what it was traded for, or else at what that slot turned out to be worth (players taken within three picks of it), since another team made the choice. A pick not yet used counts at its pick value.`,
+        `Each side's haul is combined as in the trade lab: two equal pieces count as ${f1(Math.pow(2, 1 / pkgP()))} of one, a rate fitted to this league's trades. A trade is even when every side is within 10%. FAAB is shown but not valued.`,
       ])}`;
   }
 

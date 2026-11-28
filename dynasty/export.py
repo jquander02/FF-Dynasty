@@ -249,6 +249,9 @@ def run(store: Store, site_dir: Path) -> dict[str, int]:
             "ppr": json.loads(lg["scoring_settings"] or "{}").get("rec"),
         },
     }
+    fit = store.query("SELECT body FROM raw_snapshot WHERE endpoint='package_fit'")
+    if fit:   # package exponent fitted to this league's trades (owners.fit_package)
+        meta["package"] = json.loads(fit[0]["body"])
 
     _write(out, "meta.json", meta)
     _write(out, "teams.json", teams)
@@ -311,7 +314,8 @@ def run(store: Store, site_dir: Path) -> dict[str, int]:
         for r in store.query("SELECT * FROM trade_review ORDER BY ts DESC"):
             trades.append({"id": r["transaction_id"], "season": r["season"], "week": r["week"], "ts": r["ts"],
                            "even": bool(r["even"]), "winner": r["winner"], "margin": r["margin"],
-                           "sides": json.loads(r["sides"] or "[]")})
+                           "sides": json.loads(r["sides"] or "[]"),
+                           **({"day": json.loads(r["day"])} if "day" in r.keys() and r["day"] and r["day"] != "null" else {})})
     _write(out, "trades.json", trades)
     _write(out, "owners.json", owners_out)
     finder = []
@@ -377,6 +381,9 @@ def _value_fields(pid, vals, proj, cur_ppg) -> dict:
         "proj": pr["ppg_y1"] if pr else None,
         "p0": pr["ppg_ros"] if pr else None,
         "p2": pr["ppg_y2"] if pr else None,
+        # share of the model's value that comes from this season (the rest is later seasons)
+        "now": (round(max(0.0, 1 - (pr["value_future"] or 0) / pr["model_value"]), 2)
+                if pr and pr.get("model_value") and "value_future" in pr and pr["value_future"] is not None else None),
         "ppg": c[0] if c else None,
         "gp": c[1] if c else None,
     }

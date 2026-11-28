@@ -57,15 +57,23 @@ Without the PIN only League and Trade → Past trades show.
   totals in view.
 - **Past trades:** every trade in the league's history, for all teams or one team (optionally
   only those with a given partner). Each side shows what it got, valued today and where each
-  player is now. Each player counts as banked value (his points in that team's starting lineup
-  since the trade, above a replacement starter at his position, playoff starts double, converted
-  at the model's value-per-point rate) plus what's left (today's value while he's on the team, or
-  his value on the day he was traded or dropped; a retired player keeps what he banked). Trades
-  made since daily values began (October 2026) can also be judged at that day's values. A
-  toggle switches every card between Results so far (banked + left), Today's value and On the
-  day; each asset shows one number and each trade one verdict. A pick the team used shows the player it took ("2026 round 1, 1.03, became
-  ..."); a pick the team traded on before the draft counts at what that slot was worth (today's
-  average value of the players taken within three picks of it), since another team chose the
+  player is now. Each player counts as banked value plus what's left. Banked: what his starts
+  added to that team's lineup since the trade, over the player he pushed to the bench (the
+  same-position backup with the best PPG so far that season, or a replacement-level starter if
+  the bench had nobody that good); playoff starts count double and starts in the champion's
+  title run triple (a "Title" badge), converted at the model's value-per-point rate. What's
+  left: today's value while he's on the team; if the team traded him on, his share of what that
+  later trade brought back, down the chain (trade trees); if dropped, his value that day. A
+  retired player keeps what he banked. On the day: trades since daily values began (October
+  2026) use that day's values; older ones re-run the model with only the data that existed
+  that day (`dynasty/dayvalues.py`, table `model_value_asof`) and give each player the value of
+  his rank that day on the oldest snapshot's scale (marked estimated); their picks use the
+  round's average pick value, or the slot's once the draft order was set. A toggle switches
+  every card between Results so far (banked + left), Today's value and On the day; each asset
+  shows one number and each trade one verdict. A pick the team used shows the player it took
+  ("2026 round 1, 1.03, became ..."); a pick the team traded on before the draft counts as what
+  it was traded for, or else what that slot was worth (today's average value of the players
+  taken within three picks of it), since another team chose the
   player; future picks show their projected slot. Each trade gets a verdict (won, lost or even
   within 10%, using the trade lab's package math), and a team view adds its trade record, net
   value and picks in/out. Linked from League, Team, Managers and the trade lab.
@@ -176,10 +184,18 @@ redo windows, odds and pick values with the latest scores.
 
 ## Trades and league-mates (phase 4)
 
-- **Trade value:** a package counts as (sum of value^1.3)^(1/1.3): one piece counts in full,
-  two equal pieces about 1.7x one. In a 12-team league the stud usually wins a 2-for-1.
-  Fair = within 10%. The app's trade lab and the Python engine (`dynasty/trade.py`) use the
-  same math.
+- **Trade value:** a package counts as (sum of value^P)^(1/P): one piece counts in full,
+  two equal pieces less than two. P is fitted to this league's own trades (`owners.fit_package`):
+  two-team trades with 2+ pieces on a side, at the values of their day, assumed fair on average;
+  the P that makes the two sides closest wins, shrunk toward 1.3 (20 trades' worth) and kept
+  within 1.0-2.0. It's saved as the `package_fit` snapshot and in meta.json, and the Python
+  engine (`dynasty/trade.py`), the trade lab and the Past trades view all use it. Fair =
+  within 10%.
+- **Roster spots and worth to each team (trade lab):** a side that ends up over the active
+  roster limit loses the value of the lowest-valued players it would cut. "Worth to each team"
+  splits each player's value into this season and later (the `now` share in the exports):
+  this season counts by the team's playoff odds (0.4 out of it to 1.6 a lock), later seasons
+  1.1 for rebuilding or reloading teams and 0.9 for teams going for it; picks are all later.
 - **Lineup impact:** best possible starting lineup before vs after, for both teams, now
   (injured players out), next season and in two seasons.
 - **Trade finder:** run for every team. Searches 1-for-1 and 2-for-1 deals with every other
