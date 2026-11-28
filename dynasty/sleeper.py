@@ -109,13 +109,17 @@ class SleeperClient:
             return None
         if ttl is not None and time.time() - data.get("fetched_at", 0) > ttl:
             return None
+        if ttl is None and not data.get("final"):
+            # first permanent read of something cached while it could still change (a draft in
+            # progress, a season not yet complete): fetch once more and keep that copy for good
+            return None
         return data
 
     def _write_cache(self, path: str, body: Any, ttl: float | None) -> None:
         f = self._cache_file(path)
         if f is None or ttl == 0:
             return
-        f.write_text(json.dumps({"path": path, "fetched_at": time.time(), "body": body}))
+        f.write_text(json.dumps({"path": path, "fetched_at": time.time(), "body": body, "final": ttl is None}))
 
     # ---- endpoints ----------------------------------------------------------
     def state(self):
@@ -182,9 +186,9 @@ class SleeperClient:
                 out = {str(k): v for k, v in body.items() if isinstance(v, dict)}
         return out
 
-    def players(self):
-        # ~5 MB; Sleeper asks that this be pulled at most once a day.
-        return self.get("players/nfl", ttl=DAY) or {}
+    def players(self, ttl=DAY):
+        # ~5 MB; Sleeper asks that this be pulled about once a day (game days: before kickoff too)
+        return self.get("players/nfl", ttl=ttl) or {}
 
     def trending(self, kind: str = "add", lookback_hours: int = 24, limit: int = 50):
         return (

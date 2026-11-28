@@ -215,8 +215,11 @@ class Phase4PipelineTest(Phase3PipelineTest):
         rows = [(7, 2, 40.0), (MY_ROSTER, 3, 30.0), (MY_ROSTER, 4, 20.0), (MY_ROSTER, 15, 25.0), (MY_ROSTER, 16, 50.0)]
         self.store.upsert("matchup_player", [{"league_id": lid, "week": w, "roster_id": r, "player_id": "6794",
                                               "points": p, "is_starter": 1} for r, w, p in rows])
+        # bracket games in weeks 15 (round 1) and 16 (round 2)
         self.store.upsert("bracket", [{"league_id": lid, "bracket": "winners", "round": 1, "matchup": 1,
-                                       "t1": MY_ROSTER, "t2": 7}])
+                                       "t1": MY_ROSTER, "t2": 7},
+                                      {"league_id": lid, "bracket": "winners", "round": 2, "matchup": 3,
+                                       "t1": MY_ROSTER, "t2": 5}])
         # dropped in week 16, after that week's games: the week 16 start still counts, nothing later
         self.store.upsert("txn", [{"transaction_id": "t-drop", "league_id": lid, "season": "2026", "week": 16,
                                    "type": "free_agent", "status": "complete", "created": 1795000000000,
@@ -245,7 +248,8 @@ class Phase4PipelineTest(Phase3PipelineTest):
         k = owners.value_per_point(self.store)
         self.assertEqual(jj["banked"], round(k * expect))
         self.assertEqual(jj["left"]["how"], "dropped")
-        self.assertEqual(jj["value"], jj["banked"] + jj["remain"])
+        self.assertEqual(jj["remain"], 0)                          # dropped: nothing comes back
+        self.assertEqual(jj["value"], jj["banked"])
         self.assertEqual(mine["banked"], jj["banked"])
         # on the day: 9000 for Jefferson vs 3000 + the 2027 1st (2500)
         self.assertEqual(jj["day"], 9000)
@@ -282,8 +286,12 @@ class Phase4PipelineTest(Phase3PipelineTest):
     def test_title_run_counts_triple(self):
         lid = self._jefferson([("6794", 15, 20.0, 1), ("6794", 16, 20.0, 1)])
         self.store.conn.execute("DELETE FROM matchup_player WHERE is_starter=0")
-        self.store.upsert("bracket", [{"league_id": lid, "bracket": "winners", "round": 3, "matchup": 1,
-                                       "t1": MY_ROSTER, "t2": 7, "winner": MY_ROSTER, "loser": 7, "place": 1}])
+        self.store.upsert("bracket", [{"league_id": lid, "bracket": "winners", "round": 1, "matchup": 1,
+                                       "t1": MY_ROSTER, "t2": 7, "winner": MY_ROSTER, "loser": 7, "place": None},
+                                      {"league_id": lid, "bracket": "winners", "round": 2, "matchup": 3,
+                                       "t1": MY_ROSTER, "t2": 5, "winner": MY_ROSTER, "loser": 5, "place": None},
+                                      {"league_id": lid, "bracket": "winners", "round": 3, "matchup": 5,
+                                       "t1": MY_ROSTER, "t2": 2, "winner": MY_ROSTER, "loser": 2, "place": 1}])
         self.store.commit()
         _, mine = self._mine()
         jj = [a for a in mine["got"] if a["k"] == "player"][0]
@@ -352,14 +360,21 @@ class Phase4PipelineTest(Phase3PipelineTest):
         self.assertEqual(dayvalues.cut_for("2025-11-25"), (2025, 12))
 
     def test_fit_package(self):
-        # two pieces of 500 traded for one 800 again and again: P where 500+500 packages to 800
-        log = [{"day": {}, "sides": [{"got": [{"k": "player", "day": 500}, {"k": "player", "day": 500}]},
-                                     {"got": [{"k": "player", "day": 800}]}]} for _ in range(200)]
-        fit = owners.fit_package(log)
-        self.assertEqual(fit["trades"], 200)
-        self.assertAlmostEqual(fit["fit"], 1.5, delta=0.05)                 # 2^(1/1.5) = 1.59 ~ 1.6
+        import random
+        rng = random.Random(1)
+        # two pieces traded for one, priced as if P were 1.5, with some noise
+        samples = []
+        for _ in range(60):
+            x = rng.uniform(300, 3000)
+            one = (2 * x ** 1.5) ** (1 / 1.5) * rng.uniform(0.9, 1.1)
+            samples.append(([x, x], [one]))
+        fit = owners.fit_package(samples)
+        self.assertEqual(fit["trades"], 60)
+        self.assertAlmostEqual(fit["fit"], 1.5, delta=0.1)
         self.assertGreater(fit["p"], owners.PKG_DEFAULT)
-        self.assertLess(fit["p"], fit["fit"] + 1e-9)                         # shrunk toward 1.3
+        self.assertLessEqual(fit["p"], fit["fit"])                          # shrunk toward 1.3
+        # too few trades: stay at 1.3
+        self.assertEqual(owners.fit_package(samples[:10])["p"], owners.PKG_DEFAULT)
         self.assertEqual(owners.fit_package([])["p"], owners.PKG_DEFAULT)
 
 

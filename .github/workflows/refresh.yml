@@ -2,10 +2,14 @@ name: Refresh and deploy
 
 on:
   schedule:
-    # Full refresh once a day, 4:17am Central (09:17 UTC): stats, players, owners' other leagues.
+    # Full refresh once a day, 3:17am Central standard time (09:17 UTC): stats, players, owners' other leagues.
     - cron: "17 9 * * *"
-    # Quick league-only refresh every 2 hours on game days (Sun, Mon, Thu in UTC).
-    - cron: "7 */2 * * 0,1,4"
+    # Quick league-only refreshes while games are on (times in UTC): every 2 hours Sat-Mon
+    # (Saturday and Sunday games, Monday's late window), the early hours of Tue and Fri (Monday
+    # and Thursday night games), and Thursday evening before kickoff (injury news).
+    - cron: "7 */2 * * 0,1,6"
+    - cron: "7 0-4/2 * * 2,5"
+    - cron: "7 22 * * 4"
   workflow_dispatch:
     inputs:
       mode:
@@ -15,59 +19,81 @@ on:
         options: [full, quick]
   push:
     branches: [main]
-    paths: ["site/**", "dynasty/**", "config.yaml"]
+    paths: ["site/**", "dynasty/**", "config.yaml", "requirements*"]
 
 concurrency:
   group: refresh
   cancel-in-progress: false
 
-permissions:
-  contents: write   # for the site-data snapshot branch
-  pages: write
-  id-token: write
+# Nothing by default; each job asks for only what it needs.
+permissions: {}
 
 jobs:
-  refresh:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy1.outputs.page_url || steps.deploy2.outputs.page_url || steps.deploy3.outputs.page_url }}
+    permissions:
+      contents: read
+      actions: read      # find the newest database backup if the cache is ever lost
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7
         with:
           python-version: "3.12"
           cache: pip
 
+      # requirements.lock pins exact versions with hashes (made by the "Lock dependencies" workflow)
       - name: Install
-        run: pip install -r requirements.txt
+        run: |
+          if [ -f requirements.lock ]; then
+            pip install --require-hashes -r requirements.lock
+          else
+            pip install -r requirements.txt
+          fi
 
       - name: Run tests
         run: python -m unittest discover -s tests
 
-      # The database lives in the Actions cache between runs. If it is ever lost,
-      # the next full run rebuilds it from scratch (all data is re-downloadable).
+      # The database lives in the Actions cache between runs. It holds history that can't be
+      # downloaded again (daily values, rosters over time), so if the cache is ever lost the newest
+      # backup artifact is restored instead of starting over.
       - name: Restore database
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
         with:
           path: data
           key: dbz-${{ github.run_id }}
           restore-keys: dbz-
 
+      - name: Restore from backup if the cache is gone
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -f data/dynasty.db.gz ] || [ -f data/dynasty.db ]; then exit 0; fi
+          id=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=100" \
+                 -q '[.artifacts[] | select((.name=="dynasty-db" or .name=="dynasty-db-weekly") and .expired==false)]
+                     | sort_by(.created_at) | last | .id // empty')
+          if [ -z "$id" ]; then
+            echo "::warning::No database cache and no backup: this run starts from scratch"
+            exit 0
+          fi
+          mkdir -p data
+          gh api "repos/${{ github.repository }}/actions/artifacts/$id/zip" > db.zip
+          unzip -o db.zip -d data
+          rm db.zip
+          echo "::notice::Database restored from backup artifact $id"
+
       - name: Unpack database
         run: |
           if [ -f data/dynasty.db.gz ]; then gunzip -f data/dynasty.db.gz; fi
-          ls -la data 2>/dev/null || echo "No cached database: this run starts fresh"
+          ls -la data 2>/dev/null || echo "No database: this run starts fresh"
 
       - name: Refresh data
-        env:
-          # PIN that unlocks everything but League and Past trades (repo secret DYNASTY_PIN)
-          DYNASTY_PIN: ${{ secrets.DYNASTY_PIN }}
         run: |
           MODE=full
-          if [ "${{ github.event.schedule }}" = "7 */2 * * 0,1,4" ]; then MODE=quick; fi
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "${{ github.event.schedule }}" != "17 9 * * *" ]; then MODE=quick; fi
           if [ "${{ github.event.inputs.mode }}" = "quick" ]; then MODE=quick; fi
           # A push only redeploys the app; quick-refresh so the data stays current.
           if [ "${{ github.event_name }}" = "push" ]; then MODE=quick; fi
@@ -106,8 +132,8 @@ jobs:
           python -m dynasty.backtest run backtest-bundle.json.gz --json backtest-report.json | tee backtest.log
           # Sleeper's past weekly projections (for testing projection blends): fetched once, then kept
           # on the site-data branch and carried forward
-          git fetch -q --depth 1 origin site-data 2>/dev/null \
-            && git show origin/site-data:backtest/sleeper-proj-history.json.gz > sleeper-proj-history.json.gz 2>/dev/null \
+          git fetch -q --depth 1 "https://github.com/${{ github.repository }}.git" site-data 2>/dev/null \
+            && git show FETCH_HEAD:backtest/sleeper-proj-history.json.gz > sleeper-proj-history.json.gz 2>/dev/null \
             || rm -f sleeper-proj-history.json.gz
           if [ ! -s sleeper-proj-history.json.gz ]; then
             python -m dynasty.backtest sleeper-history data/dynasty.db sleeper-proj-history.json.gz | tee -a backtest.log || true
@@ -115,95 +141,107 @@ jobs:
           msg=$(python3 -c 'import sys; s=open("backtest.log").read(); print(s.replace("%","%25").replace("\n","%0A"))')
           echo "::notice title=Backtest::$msg"
 
-      # Compressed (SQLite shrinks ~4x) so the cache stays small and reliable.
+      # Compressed (SQLite shrinks ~4x) so the cache stays small and reliable. The write-ahead log
+      # is folded into the database first, so nothing in it is lost.
       - name: Pack database
         if: success()
         run: |
+          python3 -c "import sqlite3; c=sqlite3.connect('data/dynasty.db'); c.execute('PRAGMA wal_checkpoint(TRUNCATE)'); c.close()"
           rm -f data/dynasty.db-wal data/dynasty.db-shm
           gzip -f data/dynasty.db
           ls -la data
 
       - name: Save database
         if: success()
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
         with:
           path: data
           key: dbz-${{ github.run_id }}
 
-      # The repo is public, so anyone signed in to GitHub can download run artifacts: the backup is
-      # encrypted with the PIN (decrypt: DYNASTY_PIN=... python -m dynasty.vault decrypt-file IN OUT).
-      # No PIN, no backup (the Actions cache above still holds the database).
-      - name: Encrypt database backup
-        if: success()
-        env:
-          DYNASTY_PIN: ${{ secrets.DYNASTY_PIN }}
-        run: |
-          if [ -n "$DYNASTY_PIN" ]; then
-            mkdir -p backup
-            python -m dynasty.vault encrypt-file data/dynasty.db.gz backup/dynasty.db.gz.enc
-          fi
-
+      # Backups for when the cache is lost: one a day kept 7 days, and Sunday's kept 90 days.
       - name: Back up database
         if: success()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
-          name: dynasty-db-encrypted
-          path: backup/dynasty.db.gz.enc
+          name: dynasty-db
+          path: data/dynasty.db.gz
           retention-days: 7
-          if-no-files-found: ignore
 
-      # A single-commit branch with the exported JSON, for debugging and previews.
-      - name: Snapshot data to site-data branch
+      - name: Check for the weekly backup
+        id: weekly
+        run: echo "sunday=$([ "$(date -u +%u)" = 7 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Back up database (weekly, 90 days)
+        if: success() && steps.weekly.outputs.sunday == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: dynasty-db-weekly
+          path: data/dynasty.db.gz
+          retention-days: 90
+          overwrite: true
+
+      - name: Collect data snapshot
         if: success()
         run: |
-          cd site/data
-          mkdir -p backtest
-          cp ../../backtest-bundle.json.gz ../../backtest-report.json backtest/ 2>/dev/null || true
-          cp ../../sleeper-proj-history.json.gz backtest/ 2>/dev/null || true
+          mkdir -p snapshot/backtest
+          cp -r site/data/. snapshot/
+          cp backtest-bundle.json.gz backtest-report.json sleeper-proj-history.json.gz snapshot/backtest/ 2>/dev/null || true
+
+      - name: Upload data snapshot
+        if: success()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: site-data
+          path: snapshot
+          retention-days: 1
+
+      - name: Upload app
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9  # v5
+        with:
+          path: site
+
+  # A single-commit branch with the exported JSON, for debugging and previews. Never blocks the deploy.
+  snapshot:
+    needs: build
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8
+        with:
+          name: site-data
+          path: snapshot
+      - name: Snapshot data to site-data branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd snapshot
           git init -q -b site-data
           git add .
           git -c user.name="refresh-bot" -c user.email="refresh-bot@users.noreply.github.com" commit -qm "Data snapshot $(date -u +%FT%TZ)"
-          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" site-data
-          rm -rf .git backtest
+          git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" site-data
 
-      # Publishes site/ (app + freshly exported data) to GitHub Pages.
-      # Cloudflare Pages (free) so the repo can go private. Switched on by the repo secrets
-      # CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID; until then only GitHub Pages deploys.
-      - name: Check Cloudflare setup
-        id: cf
-        run: echo "on=${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}" >> "$GITHUB_OUTPUT"
-
-      - name: Create Cloudflare Pages project (first run only)
-        if: steps.cf.outputs.on == 'true'
-        continue-on-error: true
-        uses: cloudflare/wrangler-action@v4
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages project create ff-dynasty --production-branch=main
-
-      - name: Deploy to Cloudflare Pages
-        if: steps.cf.outputs.on == 'true'
-        uses: cloudflare/wrangler-action@v4
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy site --project-name=ff-dynasty --branch=main --commit-dirty=true
-
+  # Publishes site/ (app + freshly exported data) to GitHub Pages.
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy1.outputs.page_url || steps.deploy2.outputs.page_url || steps.deploy3.outputs.page_url }}
+    steps:
       - name: Configure Pages
-        uses: actions/configure-pages@v6
-
-      - name: Upload app
-        uses: actions/upload-pages-artifact@v5
-        with:
-          path: site
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d  # v6
 
       # GitHub sometimes can't see the just-uploaded app for a few seconds ("No artifacts named
       # github-pages were found"), or rejects a deploy ("try again later"): wait and retry twice.
       - name: Deploy to GitHub Pages
         id: deploy1
         continue-on-error: true
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346  # v5
 
       - name: Wait before retrying deploy
         if: steps.deploy1.outcome == 'failure'
@@ -213,7 +251,7 @@ jobs:
         id: deploy2
         if: steps.deploy1.outcome == 'failure'
         continue-on-error: true
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346  # v5
 
       - name: Wait before last deploy attempt
         if: steps.deploy1.outcome == 'failure' && steps.deploy2.outcome == 'failure'
@@ -222,4 +260,4 @@ jobs:
       - name: Deploy to GitHub Pages (last try)
         id: deploy3
         if: steps.deploy1.outcome == 'failure' && steps.deploy2.outcome == 'failure'
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346  # v5

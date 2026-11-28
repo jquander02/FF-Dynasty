@@ -49,9 +49,11 @@ class ScheduleTest(unittest.TestCase):
         self.assertEqual(t1["allplay"], [4.0, 2.0])             # beats 2 and 3 each week, loses to 4
         self.assertAlmostEqual(t1["luck"], 2 - 2 * 4 / 6, places=2)
         self.assertEqual(t1["opp_ppg"], 85.0)
-        self.assertEqual(t1["sos_played"], 85.0 - 97.5)
-        t3 = self.r["teams"]["3"]                                # faced 4 (120) and 1 (100): toughest
-        self.assertEqual(t3["sos_played_rank"], 1)
+        self.assertEqual(t1["sos_played"], round(85.0 - (90 + 80 + 120) / 3, 1))   # vs the other three teams
+        # 2 and 3 both faced 4 (120) and 1 (100); against the other teams' average, 2 (whose
+        # others include the weak 3) had it toughest
+        self.assertEqual(self.r["teams"]["2"]["sos_played_rank"], 1)
+        self.assertEqual(self.r["teams"]["3"]["sos_played_rank"], 2)
         g = self.r["games"]["1"][0]
         self.assertEqual((g["week"], g["opp"], g["res"], g["st"]), (1, 2, "W", "final"))
 

@@ -23,6 +23,9 @@ from .model import FLEX_ELIGIBLE, POSITIONS
 from .store import Store
 
 OUT_STATUSES = {"IR", "Out", "PUP", "Sus", "NA", "COV", "DNR"}
+LONG_STATUSES = OUT_STATUSES - {"Out"}
+OUT_SHARE = 0.85    # rest-of-season share for a player listed Out (usually a game or two)
+LONG_SHARE = 0.3    # ... and for one on IR / PUP / suspended
 
 
 def best_lineup(players: list[tuple[str, str, float]], roster_positions: list[str]) -> tuple[float, set]:
@@ -90,9 +93,12 @@ def build(store: Store) -> list[dict]:
             bands[age_band(p["age"] if p else None)] += v
             if not p:
                 continue
-            hurt = slot == "reserve" or inj.get(pid) in OUT_STATUSES
-            if not hurt:
-                now.append((pid, p["position"], p["ppg_ros"]))
+            # rest of season: scale by how much of it he's likely to miss ("Out" is usually a game
+            # or two; IR and other long absences most of it, though many come back)
+            st = inj.get(pid)
+            share = LONG_SHARE if (slot == "reserve" or st in LONG_STATUSES) else OUT_SHARE if st == "Out" else 1.0
+            if share > 0 and p["ppg_ros"] is not None:
+                now.append((pid, p["position"], p["ppg_ros"] * share))
             nxt.append((pid, p["position"], p["ppg_y1"]))
             later.append((pid, p["position"], p["ppg_y2"]))
         s_now, starters_now = best_lineup(now, roster_positions)

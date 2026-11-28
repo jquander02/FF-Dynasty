@@ -43,6 +43,8 @@ from .model import POSITIONS, ModelConfig
 log = logging.getLogger(__name__)
 
 CUTS = (0, 4, 8, 12)
+# "season" made the live model extrapolate (it's always a year past the training data)
+DROP_FEATURES = ("season",)
 HORIZONS = ("ros", "y1", "y2", "y3")
 POS_CODE = {"QB": 0, "RB": 1, "WR": 2, "TE": 3}
 MIN_TARGET_GAMES = {"ros": 3, "y1": 4, "y2": 4, "y3": 4}
@@ -500,7 +502,7 @@ def fit(rows: list[dict], params: dict | None = None) -> Learned:
         for n, v in r["f"].items():
             if v is not None:
                 seen[n] += 1
-    names = sorted(n for n, c in seen.items() if c >= 50)   # drop features almost never present
+    names = sorted(n for n, c in seen.items() if c >= 50 and n not in DROP_FEATURES)   # and ones almost never present
     L = Learned(feature_names=names, resid_mode=resid_mode)
     for h in horizons:
         tr = [r for r in rows if h in r.get("t", {})]
@@ -628,11 +630,13 @@ def current_season_from_bundle(b: dict, cfg: ModelConfig, season: int, week: int
     if len(have) < 4:
         log.info("learned: not enough history (%d seasons)", len(have))
         return {}
-    rows = history_rows(d, cfg, have[2:])
+    k = week if week and week > 0 else 0
+    # train on this exact week of past seasons too, so the model never predicts at a week it
+    # hasn't seen (the standard cuts are 0/4/8/12)
+    rows = history_rows(d, cfg, have[2:], cuts=tuple(sorted(set(CUTS) | {k})))
     L = fit(rows, LIVE_PARAMS)
     if "ros" not in L.ppg:
         return {}
-    k = week if week and week > 0 else 0
     base, _ = base_projections(d, season, k, cfg)
     live = build_rows(d, season, k, base)
     predict(L, live)

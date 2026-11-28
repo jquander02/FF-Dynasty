@@ -228,6 +228,7 @@ def project_as_of(b: dict, through: int, cfg: ModelConfig, share: dict | None = 
 
 
 LINEUP = ["QB", "RB", "RB", "WR", "WR", "TE", "FLEX"]   # this league's starting lineup
+TUNED_THROUGH = 2025   # ModelConfig defaults were chosen on seasons up to here (tuned Oct-Nov 2026)
 
 
 def value_check(b: dict, cfg: ModelConfig, start: int, end: int) -> dict:
@@ -500,6 +501,13 @@ def run(b: dict, cfg: ModelConfig | None = None, start: int | None = None, end: 
     report = {"config": {k: v for k, v in cfg.__dict__.items() if k != "extra"},
               "as_of": [start - 1, end - 1], "rows": len(rows)}
     report["overall"] = {f"h{h}": block([r for r in rows if r["h"] == h]) for h in (1, 2, 3)}
+    # The settings were tuned on seasons through TUNED_THROUGH, so only later seasons are a true
+    # out-of-sample test (empty until such a season finishes)
+    oos = [r for r in rows if r["season"] > TUNED_THROUGH]
+    report["out_of_sample"] = {"seasons": sorted({r["season"] for r in oos}),
+                               **({f"h{h}": block([r for r in oos if r["h"] == h]) for h in (1, 2)} if oos else {})}
+    report["per_season_h1"] = {season: _summ([r for r in rows if r["h"] == 1 and r["season"] == season], "model")
+                               for season in sorted({r["season"] for r in rows})}
     report["by_position"] = {pos: {f"h{h}": block([r for r in rows if r["h"] == h and r["pos"] == pos]) for h in (1, 2)}
                              for pos in POSITIONS}
     report["by_age"] = {f"{pos} {band}": _summ([r for r in rows if r["pos"] == pos and age_band(r["age"]) == band and r["h"] <= 2], "model")
@@ -544,7 +552,10 @@ def _parse_set(items: list[str], cfg: ModelConfig) -> ModelConfig:
     for it in items or []:
         k, v = it.split("=", 1)
         cur = getattr(cfg, k)
-        upd[k] = tuple(float(x) for x in v.split(",")) if isinstance(cur, tuple) else type(cur)(v)
+        if isinstance(cur, bool):
+            upd[k] = v.strip().lower() in ("1", "true", "yes", "on")
+        else:
+            upd[k] = tuple(float(x) for x in v.split(",")) if isinstance(cur, tuple) else type(cur)(v)
     return replace(cfg, **upd)
 
 
@@ -629,6 +640,11 @@ def main(argv=None) -> int:
           f"rank corr {v['rank_corr_top150']}  top-36 hit rate {v['top36_hit_rate']}")
     print("  by tier:", {k: (x.get("ratio"), x.get("beat")) for k, x in v["by_tier"].items()})
     print("  by position:", {k: (x.get("ratio"), x.get("beat")) for k, x in v["by_position"].items()})
+    print("  h1 MAE by season:", {k: x.get("mae") for k, x in rep["per_season_h1"].items()})
+    oos = rep["out_of_sample"]
+    print(f"  out of sample (seasons after {TUNED_THROUGH}): " + (
+        "  ".join(f"{h} MAE {oos[h]['model'].get('mae')} (n {oos[h]['model']['n']})" for h in ("h1", "h2") if h in oos)
+        if oos["seasons"] else "none finished yet"))
     return 0
 
 

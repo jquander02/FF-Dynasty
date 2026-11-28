@@ -103,7 +103,8 @@ class League:
         self.deadline = lg["trade_deadline"]
         st = store.query("SELECT body FROM raw_snapshot WHERE endpoint='state/nfl'")
         self.week = (json.loads(st[0]["body"]) if st and st[0]["body"] else {}).get("week") or 0
-        self.weeks_to_deadline = max(0, (self.deadline or 0) - self.week) if self.deadline else None
+        # Sleeper allows trades through the deadline week itself
+        self.weeks_to_deadline = max(0, (self.deadline or 0) - self.week + 1) if self.deadline else None
 
         self.tw = {r["roster_id"]: dict(r) for r in store.query("SELECT * FROM team_window")}
         self.sim = {r["roster_id"]: dict(r) for r in store.query("SELECT * FROM season_sim")}

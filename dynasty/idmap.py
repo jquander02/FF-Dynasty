@@ -83,7 +83,7 @@ def build(store: Store) -> dict[str, int]:
         rows.append(
             {
                 "player_id": pid,
-                "gsis_id": src.get("gsis_id"),
+                "gsis_id": src.get("gsis_id") or _clean(p["gsis_id"]),
                 "pfr_id": src.get("pfr_id"),
                 "espn_id": src.get("espn_id") or _clean(p["espn_id"]),
                 "ktc_id": src.get("ktc_id"),

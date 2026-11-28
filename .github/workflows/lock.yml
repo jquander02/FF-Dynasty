@@ -1,0 +1,27 @@
+name: Lock dependencies
+
+# Run by hand after changing requirements.txt: prints a hash-pinned requirements.lock (as an
+# annotation on the run) to commit, so the refresh installs exactly those packages.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7
+        with:
+          python-version: "3.12"
+      - name: Compile the lock file
+        run: |
+          pip install pip-tools
+          pip-compile --generate-hashes --allow-unsafe --strip-extras -q -o requirements.lock requirements.txt
+          pip install --require-hashes -r requirements.lock
+          python -m unittest discover -s tests
+          python3 -c 'import sys; s=open("requirements.lock").read(); print("::notice title=requirements.lock::" + s.replace("%","%25").replace("\n","%0A"))'

@@ -252,6 +252,8 @@ def run(store: Store, site_dir: Path) -> dict[str, int]:
     fit = store.query("SELECT body FROM raw_snapshot WHERE endpoint='package_fit'")
     if fit:   # package exponent fitted to this league's trades (owners.fit_package)
         meta["package"] = json.loads(fit[0]["body"])
+    from .trade import trades_count_now
+    meta["trades_count_now"] = trades_count_now(store)   # false past the deadline: trades wait for the offseason
 
     _write(out, "meta.json", meta)
     _write(out, "teams.json", teams)
@@ -332,11 +334,9 @@ def run(store: Store, site_dir: Path) -> dict[str, int]:
     _write(out, "sim.json", sim_export(store))
     sc = store.query("SELECT body FROM raw_snapshot WHERE endpoint='schedule_report'")
     _write(out, "schedule.json", json.loads(sc[0]["body"]) if sc and sc[0]["body"] else {"teams": {}})
-    # PIN lock: everything but the League and Past trades data goes into an encrypted vault
-    from . import vault
-    locked = vault.lock(out, os.environ.get("DYNASTY_PIN"))
+    (Path(out) / "vault.json").unlink(missing_ok=True)   # left over from the old PIN lock
     return {"teams": len(teams), "picks": len(picks), "activity": len(activity), "seasons": len(history),
-            "values": len(value_list), "locked_files": locked["locked"]}
+            "values": len(value_list)}
 
 
 def _table(store: Store, name: str) -> bool:

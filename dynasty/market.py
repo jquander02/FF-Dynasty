@@ -99,6 +99,14 @@ def parse_dynastyprocess(text: str, fp_to_sleeper: dict[str, str]) -> list[dict]
 def _store(store: Store, source: str, rows: list[dict]) -> int:
     d = today()
     store.conn.executescript(SCHEMA)
+    # a pull far shorter than the last one is a broken or partial list: keep the last good one
+    # (every source is mapped onto the market curve, so a partial list would reshape all values)
+    prev = store.query("SELECT COUNT(*) c FROM market_value WHERE source=? AND snapshot_date="
+                       "(SELECT MAX(snapshot_date) FROM market_value WHERE source=? AND snapshot_date<?)",
+                       (source, source, d))[0]["c"]
+    if prev and len(rows) < MIN_SHARE * prev:
+        log.warning("%s returned %d players vs %d last time: kept the previous list", source, len(rows), prev)
+        return -1
     store.delete("market_value", "snapshot_date=? AND source=?", (d, source))
     seen = set()
     out = []
@@ -108,6 +116,9 @@ def _store(store: Store, source: str, rows: list[dict]) -> int:
         seen.add(r["key"])
         out.append({"snapshot_date": d, "source": source, **r})
     return store.upsert("market_value", out)
+
+
+MIN_SHARE = 0.7   # reject a pull with under 70% of the previous one's players
 
 
 def run(store: Store, teams: int = 12, ppr: float = 1.0, num_qbs: int = 1,

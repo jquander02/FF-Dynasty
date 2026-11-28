@@ -53,12 +53,15 @@ class Ctx:
     windows: dict = field(default_factory=dict)     # rid -> window label
     p_playoffs: dict = field(default_factory=dict)  # rid -> playoff odds this season
     names: dict = field(default_factory=dict)       # rid -> team name
+    slots: dict = field(default_factory=dict)       # pid -> roster slot (starter, bench, taxi, reserve)
+    now_counts: bool = True                         # a trade now would count this season
 
 
 def load(store: Store) -> Ctx:
     lg = store.query("SELECT * FROM league_season WHERE is_current=1")[0]
     lid = lg["league_id"]
     ctx = Ctx(roster_positions=json.loads(lg["roster_positions"] or "[]"))
+    ctx.now_counts = trades_count_now(store)
     vd = store.query("SELECT MAX(snapshot_date) d FROM player_value")[0]["d"]
     val = {r["player_id"]: r["value"] for r in store.query("SELECT player_id, value FROM player_value WHERE snapshot_date=?", (vd,))}
     proj = {r["player_id"]: r for r in store.query("SELECT * FROM player_projection")}
@@ -68,6 +71,7 @@ def load(store: Store) -> Ctx:
         pid = r["player_id"]
         p, i = proj.get(pid), info.get(pid, {})
         ctx.rosters.setdefault(r["roster_id"], []).append(pid)
+        ctx.slots[pid] = r["slot"]
         ctx.players[pid] = {
             "pos": (p["position"] if p else i.get("position")),
             "name": i.get("full_name") or pid,
@@ -93,6 +97,35 @@ def load(store: Store) -> Ctx:
            WHERE r.league_id=?""", (lid,)):
         ctx.names[r["roster_id"]] = (r["n"] or "").strip()
     return ctx
+
+
+def trades_count_now(store: Store) -> bool:
+    """Whether a trade made today affects this season: in the regular season up to and including
+    the deadline week. After it (and in the playoffs) trades wait for the offseason, when this
+    season is over; in the offseason 'now' is the coming season."""
+    lg = store.query("SELECT trade_deadline FROM league_season WHERE is_current=1")
+    st = store.query("SELECT body FROM raw_snapshot WHERE endpoint='state/nfl'")
+    state = json.loads(st[0]["body"]) if st and st[0]["body"] else {}
+    if state.get("season_type") == "post":
+        return False
+    if state.get("season_type") != "regular":
+        return True
+    dl = (lg[0]["trade_deadline"] if lg else None) or 0
+    return not dl or int(state.get("week") or 0) <= dl
+
+
+def roster_cut(ctx: Ctx, rid: int, out: set, inn: list) -> tuple[int, float, list]:
+    """A side that ends up over the active-roster limit must cut players: (how many, their value,
+    who), cutting its lowest-valued skill players (never ones it just got)."""
+    limit = len(ctx.roster_positions)
+    active = [p for p in ctx.rosters.get(rid, []) if ctx.slots.get(p) not in ("taxi", "reserve")]
+    after = [p for p in active if p not in out] + [p for p in inn if p not in ctx.picks]
+    n = max(0, len(after) - max(limit, len(active))) if limit else 0
+    if not n:
+        return 0, 0.0, []
+    cands = sorted((p for p in after if p not in inn and ctx.players.get(p, {}).get("pos") in ("QB", "RB", "WR", "TE")),
+                   key=lambda p: ctx.players[p]["val"])[:n]
+    return n, sum(ctx.players[p]["val"] for p in cands), cands
 
 
 def strengths(ctx: Ctx, pids: list[str]) -> tuple[float, float, float]:
@@ -127,13 +160,16 @@ def evaluate(ctx: Ctx, team_a: int, team_b: int, a_gives: list[str], b_gives: li
     before_a = base.get(team_a) or strengths(ctx, ra)
     before_b = base.get(team_b) or strengths(ctx, rb)
     sa, sb = strengths(ctx, after_a), strengths(ctx, after_b)
+    # roster spots: what each side must cut to fit what it gets (as in the app's trade lab)
+    ca, cb = roster_cut(ctx, team_a, give_a, list(give_b)), roster_cut(ctx, team_b, give_b, list(give_a))
     big = max(adj_a, adj_b, 1.0)
-    diff = adj_b - adj_a  # >0: team A receives more
+    diff = (adj_b - ca[1]) - (adj_a - cb[1])  # >0: team A comes out ahead
     verdict = "fair" if abs(diff) <= FAIR * big else ("a_wins" if diff > 0 else "b_wins")
     return {
         "a_gives_value": round(sum(va)), "b_gives_value": round(sum(vb)),
         "a_gives_adj": round(adj_a), "b_gives_adj": round(adj_b),
         "a_net": round(diff), "verdict": verdict,
+        "a_cuts": ca[2], "b_cuts": cb[2],
         "a_delta": [round(x - y, 2) for x, y in zip(sa, before_a)],
         "b_delta": [round(x - y, 2) for x, y in zip(sb, before_b)],
     }
@@ -153,8 +189,9 @@ def find_trades(store: Store, me: int, max_per_team: int = 3, total: int = 20,
     for rid, pids in ctx.rosters.items():
         if rid == me:
             continue
-        # buyers: contenders and anyone with 40%+ playoff odds; everyone else is building
-        contending = ctx.windows.get(rid) in CONTEND or ctx.p_playoffs.get(rid, 0.0) >= 0.4
+        # buyers: contenders and anyone with 40%+ playoff odds; everyone else is building. Past the
+        # trade deadline nobody can buy for this season: every deal is judged on next season on
+        contending = ctx.now_counts and (ctx.windows.get(rid) in CONTEND or ctx.p_playoffs.get(rid, 0.0) >= 0.4)
         theirs = [p for p in pids if ctx.players[p]["val"] >= 400]
         theirs += [k for k, pk in ctx.picks.items() if pk["owner"] == rid and pk["value"] >= 400]
         found = []
@@ -177,7 +214,8 @@ def find_trades(store: Store, me: int, max_per_team: int = 3, total: int = 20,
                     continue  # a builder only bites if it helps the next two seasons
                 my_future = (ev["a_delta"][1] + ev["a_delta"][2]) / 2
                 their_gain = their_now if contending else their_future
-                score = ev["a_net"] / 100 + (my_future if rebuilding else ev["a_delta"][0]) * 10 + their_gain * 5
+                my_soon = ev["a_delta"][0] if ctx.now_counts else ev["a_delta"][1]
+                score = ev["a_net"] / 100 + (my_future if rebuilding else my_soon) * 10 + their_gain * 5
                 found.append({
                     "partner": rid, "partner_team": ctx.names.get(rid), "partner_window": ctx.windows.get(rid),
                     "give": list(give), "get": [get], **ev, "score": round(score, 1),
@@ -195,7 +233,8 @@ def find_trades(store: Store, me: int, max_per_team: int = 3, total: int = 20,
     out.sort(key=lambda x: -x["score"])
     out = out[:total]
     for f in out:
-        f["partner_buying"] = ctx.windows.get(f["partner"]) in CONTEND or ctx.p_playoffs.get(f["partner"], 0.0) >= 0.4
+        f["partner_buying"] = ctx.now_counts and (ctx.windows.get(f["partner"]) in CONTEND
+                                                  or ctx.p_playoffs.get(f["partner"], 0.0) >= 0.4)
 
     def label(a):
         if a in ctx.picks:

@@ -23,7 +23,7 @@ The app has five sections (bottom bar on phones, top menu on PC), each with a ro
 | Trade | Trade lab · Past trades · Managers |
 | Values | Players · Draft picks · Moves |
 
-Without the PIN only League and Trade → Past trades show.
+Everything is open to anyone with the link (there is no PIN).
 
 - **League:** week, trade deadline, best record and most roster value; standings with playoff
   odds, value and each team's contention window, and a chart of every team's lineup strength
@@ -58,25 +58,28 @@ Without the PIN only League and Trade → Past trades show.
 - **Past trades:** every trade in the league's history, for all teams or one team (optionally
   only those with a given partner). Each side shows what it got, valued today and where each
   player is now. Each player counts as banked value plus what's left. Banked: what his starts
-  added to that team's lineup since the trade, over the player he pushed to the bench (the
-  same-position backup with the best PPG so far that season, or a replacement-level starter if
-  the bench had nobody that good); playoff starts count double and starts in the champion's
-  title run triple (a "Title" badge), converted at the model's value-per-point rate. What's
-  left: today's value while he's on the team; if the team traded him on, his share of what that
-  later trade brought back, down the chain (trade trees); if dropped, his value that day. A
-  retired player keeps what he banked. On the day: trades since daily values began (October
-  2026) use that day's values; older ones re-run the model with only the data that existed
-  that day (`dynasty/dayvalues.py`, table `model_value_asof`) and give each player the value of
-  his rank that day on the oldest snapshot's scale (marked estimated); their picks use the
-  round's average pick value, or the slot's once the draft order was set. A toggle switches
-  every card between Results so far (banked + left), Today's value and On the day; each asset
-  shows one number and each trade one verdict. A pick the team used shows the player it took
-  ("2026 round 1, 1.03, became ..."); a pick the team traded on before the draft counts as what
-  it was traded for, or else what that slot was worth (today's average value of the players
-  taken within three picks of it), since another team chose the
-  player; future picks show their projected slot. Each trade gets a verdict (won, lost or even
-  within 10%, using the trade lab's package math), and a team view adds its trade record, net
-  value and picks in/out. Linked from League, Team, Managers and the trade lab.
+  added to that team's lineup since the trade, over the player he kept on the bench (the backup
+  with the best PPG so far that season and at least replacement level: same position first,
+  then any flex position for a RB/WR/TE; else a replacement-level starter), at the median
+  value-per-point of the 200 most valuable players. Starts in winners-bracket games count
+  double and in the champion's title run triple (a "Title" badge); banked can be negative.
+  What's left: today's value while he's on the team; if the team traded him on, his share of
+  the packaged haul that later trade brought back, down the chain (trade trees); if dropped,
+  nothing. Franchises are followed by owner across seasons. Team totals (records, net value,
+  Managers) use `once` values instead, where a player traded on counts at his value when he
+  left, so each later trade is counted once. On the day: trades since daily values began
+  (October 2026) use that day's values; older ones re-run the model with only the data that
+  existed that day (`dynasty/dayvalues.py`, table `model_value_asof`) and give each player the
+  value of his rank that day on the oldest snapshot's scale (marked estimated, even within 25%,
+  and not judged at all when the model had no value for a player that day); their picks use the
+  oldest pick values for that year and round, or the slot's once the draft order was set. A
+  toggle switches every card between Results so far, Today's value and On the day. A pick the
+  team used shows the player it took ("2026 round 1, 1.03, became ..."); a pick the team
+  traded on before the draft counts as what it was traded for, or else what that slot was
+  worth (today's average value of the players taken within three picks of it). Sides are
+  packaged per pair of teams, so three-team trades net to zero; FAAB-only swaps aren't judged.
+  Each trade gets a verdict (won, lost or even within 10%), and a team view adds its trade
+  record, net value and picks in/out. Linked from League, Team, Managers and the trade lab.
 - **Player sheet:** tap any player anywhere for his value breakdown (model, FantasyCalc,
   DynastyProcess), projected points per game for three seasons, this season's scoring, a value
   trend, and a one-tap "build a trade" or "shop him" into the trade lab
@@ -105,13 +108,20 @@ reload button at the top fetches the newest refresh. Each screen has a "How this
    nflverse history, with a draft-capital prior for rookies and young players. Projected
    for the rest of this season and the next three, then valued as points above a
    replacement-level player (sized from this league's lineup: 12 teams, 1 QB, 2 RB,
-   2 WR, 1 TE, 1 FLEX), discounted by year.
+   2 WR, 1 TE, 1 FLEX), discounted by year. The window rolls: as games are played, a share of
+   a fourth season phases in and the discounts slide (1.0 now, 0.9 a year out, ...), so values
+   don't jump when a season ends or the league renews. In the offseason, a season that hasn't
+   started isn't counted as missed games. A veteran with no NFL team keeps 10% of his value in
+   season, 35% in the offseason (free agents still sign).
 3. **Market.** FantasyCalc (12-team, 1QB, full PPR dynasty, from real trades) and
    DynastyProcess values, stored daily.
 4. **Blend.** All three are put on FantasyCalc's value scale by rank and blended
    60% model / 30% FantasyCalc / 10% DynastyProcess. Change the mix in `config.yaml`
    under `value_weights`. A market source whose data is more than 21 days old (our last pull, or
-   DynastyProcess's FantasyPros scrape date) drops out of the blend until it's fresh.
+   DynastyProcess's FantasyPros scrape date) drops out of the blend until it's fresh. A market
+   list of 300+ players counts as complete: a player it leaves off counts as 0 there (before,
+   his whole value fell to the model, which let unsigned backup QBs rank like starters). A
+   pull with under 70% of the previous one's players is rejected as partial.
 
 **Backtest.** `dynasty/backtest.py` reruns the model as of each offseason from 2015 to 2024 using
 only data available then and checks it two ways:
@@ -161,15 +171,20 @@ Tables: `player_week`, `player_season`, `age_curve`, `draft_prior`, `player_proj
 ## Windows, draft odds and pick values (phase 3)
 
 - **Team strength:** each roster's best starting lineup by projected points per game, for the
-  rest of this season (injured players left out), next season, and two seasons out.
+  rest of this season (a player listed Out at 85% of his projection, one on IR at 30%), next
+  season, and two seasons out.
   Labels: *Dynasty power* (top third now and later), *Win now*, *Rising*, *Rebuild*, *Middle*.
 - **Draft odds:** the rest of the regular season is simulated 10,000 times on Sleeper's real
   schedule. Weekly scores are drawn around a mix of points scored so far and projected lineup
   strength, with spread measured from this league's own matchups. The rookie draft is assumed
   linear, worst record first (ties by points for); the refresh summary checks that rule
-  against the last rookie draft. Drafts after next use projected strength plus wide noise.
+  against the last rookie draft. Playoff games already played keep their results, and the
+  6-team bracket is Sleeper's fixed one (1 seed meets the 4/5 winner). Once a season is over,
+  this year's draft order is fixed: Sleeper's own when set, else the final standings and bracket.
+  Drafts after next use projected strength plus wide noise.
 - **Pick value:** 60% from what this league's past rookie picks are worth now at each
-  overall pick (fitted curve, discounted 10% per year out), 40% from FantasyCalc and
+  overall pick (fitted curve, corrected from the typical pick to the average one, discounted
+  10% per year out), 40% from FantasyCalc and
   DynastyProcess pick values; averaged over the slot odds.
 - **Plan (built for every team):** the strategy comes from playoff and title odds this season
   and the team's lineup rank now, next season and in two seasons. Each strategy has a target
@@ -185,17 +200,22 @@ redo windows, odds and pick values with the latest scores.
 ## Trades and league-mates (phase 4)
 
 - **Trade value:** a package counts as (sum of value^P)^(1/P): one piece counts in full,
-  two equal pieces less than two. P is fitted to this league's own trades (`owners.fit_package`):
-  two-team trades with 2+ pieces on a side, at the values of their day, assumed fair on average;
-  the P that makes the two sides closest wins, shrunk toward 1.3 (20 trades' worth) and kept
-  within 1.0-2.0. It's saved as the `package_fit` snapshot and in meta.json, and the Python
-  engine (`dynasty/trade.py`), the trade lab and the Past trades view all use it. Fair =
-  within 10%.
+  two equal pieces less than two. P is 1.3 until the league has 30 two-team trades with 2+
+  pieces on a side made since daily values began (estimates are too noisy); then it's fitted
+  to them (`owners.fit_package`: trades assumed fair on average, the P that makes the two sides
+  closest), shrunk toward 1.3 by how precise the fit is (bootstrap). It's saved as the
+  `package_fit` snapshot and in meta.json; the Python engine (`dynasty/trade.py`), the trade lab
+  and Past trades all use it. Fair = within 10%.
 - **Roster spots and worth to each team (trade lab):** a side that ends up over the active
   roster limit loses the value of the lowest-valued players it would cut. "Worth to each team"
   splits each player's value into this season and later (the `now` share in the exports):
   this season counts by the team's playoff odds (0.4 out of it to 1.6 a lock), later seasons
   1.1 for rebuilding or reloading teams and 0.9 for teams going for it; picks are all later.
+  The trade finder counts roster spots the same way.
+- **Trade deadline:** trades go through until the end of the deadline week. After it (and in
+  the playoffs), a trade waits for the offseason, so the finder and the lab judge deals on next
+  season and later, the lab hides this season's odds, and this season's value counts for
+  nothing (`trade.trades_count_now`, `meta.trades_count_now`).
 - **Lineup impact:** best possible starting lineup before vs after, for both teams, now
   (injured players out), next season and in two seasons.
 - **Trade finder:** run for every team. Searches 1-for-1 and 2-for-1 deals with every other
@@ -229,9 +249,14 @@ Tables: `owner_profile`, `trade_review`, `trade_suggestion`.
   misses barely correlate (0.04), so team variances add. Win odds use a normal approximation.
 - **Live:** finished games count actual points, games in progress count points so far plus
   the unplayed share of the projection, and started players are locked like on Sleeper.
-  Quick refreshes every two hours on game days update scores; injury news updates each morning.
+  Quick refreshes while games are on update scores; injury news updates each morning and again
+  within three hours of a kickoff.
+- **Season simulation inputs:** every rostered player (IR included, so returns count) for each
+  remaining week: points if he plays and the chance he plays. For weeks after this one, a
+  player Sleeper projects still only plays with his expected share of games (injuries happen).
 - **Waivers:** for every team and free agent, the points he adds to that team's best lineup in
-  each remaining week (playoff weeks weighted by playoff odds) plus his model value beyond
+  each remaining week (regular-season weeks by how much the team still has to play for: a team
+  that's out gains little now; playoff weeks by its chance of still being alive that round) plus his model value beyond
   this season. Bids pay only for the edge over the next-best free agent (lineup gain over the
   best other free agent at his position, future value over the best other stash), since that
   one is free: bid = remaining FAAB × edge ÷ (edge + 150), capped at 75%, held to just above
@@ -254,19 +279,6 @@ Tables: `owner_profile`, `trade_review`, `trade_suggestion`.
 Tables: `week_team`; the full report is `raw_snapshot['weekly']`, exported as `weekly.json`.
 
 ---
-
-## PIN lock
-
-League (with History) and Past trades are open to anyone with the link; their open files carry only
-what those screens show (full team and league files ride in the vault). Everything else is
-encrypted with the PIN: each refresh gzips those data files into `data/vault.json`, encrypted
-with AES-256-GCM under a key derived from the PIN (PBKDF2-SHA256, 600,000 rounds; `dynasty/vault.py`).
-The app asks for the PIN once per device and keeps the derived key; the lock button in the header
-forgets it. Set the PIN as the repository secret `DYNASTY_PIN` (Settings → Secrets and variables →
-Actions). Without it, data is published unlocked and the refresh logs a warning. The daily database
-backup (a run artifact, downloadable on a public repo) is encrypted with the same PIN; restore with
-`DYNASTY_PIN=... python -m dynasty.vault decrypt-file dynasty.db.gz.enc dynasty.db.gz`. Use 6+ digits:
-a 4-digit PIN could be brute-forced from the downloaded vault in under an hour.
 
 ## Where it lives
 
@@ -294,13 +306,24 @@ Build and deployment → Source: GitHub Actions**. Then re-run the workflow from
 
 | When | What runs |
 | --- | --- |
-| Every day, 4:17am Central | Full refresh: league, players file, owners' other leagues, nflverse stats, ID mapping |
-| Every 2 hours on Sun, Mon, Thu | Quick refresh: league data only (rosters, scores, transactions, picks) |
+| Every day, 09:17 UTC (3:17am Central in winter) | Full refresh: league, players file, owners' other leagues, nflverse stats, ID mapping |
+| While games are on: every 2 hours Sat-Mon, early Tue and Fri (UTC), Thu evening | Quick refresh: league data only (rosters, scores, transactions, picks); within 3 hours of a kickoff it also refreshes the players file for injury and inactive news |
 | Any time | Actions tab → Refresh and deploy → Run workflow |
 
-The database is kept between runs in GitHub's Actions cache, and a copy is attached to each
-run as a downloadable artifact for 7 days. If the cache is ever cleared, the next full run
-rebuilds everything. Actions minutes are free and unlimited for public repos.
+The database is kept between runs in GitHub's Actions cache. It holds history that can't be
+downloaded again (the daily values behind "On the day" and the value trends, rosters over time),
+so every run also saves it as an artifact (`dynasty-db`, kept 7 days) and Sunday's runs as
+`dynasty-db-weekly` (kept 90 days). If the cache is ever cleared, the next run restores the newest
+backup before refreshing. Actions minutes are free and unlimited for public repos.
+
+The workflow runs as three jobs with only the permissions each needs: build (read-only: tests,
+refresh, backups), snapshot (writes the site-data branch; can't block the deploy) and deploy
+(GitHub Pages). Actions are pinned to commits. After changing `requirements.txt`, run the "Lock
+dependencies" workflow and commit the `requirements.lock` it prints; the refresh then installs
+exactly those hash-checked packages.
+
+When Sleeper renews the league for a new season (new league id), the refresh finds the new league
+through the old one and follows it, with a warning to update `league_id` in `config.yaml`.
 
 ## Running it on your PC (optional)
 
@@ -377,6 +400,12 @@ Run tests with `python -m unittest discover -s tests`.
 - nflverse datasets that aren't published yet (common early in a season) are skipped with a
   warning and retried next run.
 - Rookie-draft lottery settings aren't exposed until the 2027 draft is created.
+- Tested in the November 2026 audit and kept as is, because the backtest got worse: wider
+  value ranges for developmental players (rank correlation .595 -> .567), veterans' own playing
+  time under 10 games (.595 -> .588), regressing thin samples toward backup level, and looser
+  age-curve survival rules (projections biased low). The flags stay in `ModelConfig`.
+- The model's settings were tuned on seasons through 2025, so the backtest is in-sample; it
+  prints error by season and a separate out-of-sample line that fills in from 2026 on.
 
 
 ## Design

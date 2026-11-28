@@ -44,6 +44,9 @@ def rank_map(scores: dict[str, float], curve: list[float]) -> dict[str, float]:
     return out
 
 
+FULL_LIST = 300   # a market source listing this many players counts as complete
+
+
 def build(store: Store, weights: dict | None = None) -> dict:
     w = dict(DEFAULT_WEIGHTS)
     w.update(weights or {})
@@ -122,6 +125,11 @@ def build(store: Store, weights: dict | None = None) -> dict:
             if r["player_id"] in need:
                 pos_of[r["player_id"]] = r["position"]
 
+    # A market list this long covers every player anyone would roster: being left off it is evidence
+    # of near-zero value, so it counts as 0 rather than dropping out (which handed the player's
+    # whole value to the model alone and let unsigned backups rank like starters)
+    full_fc = len(fc) >= FULL_LIST and w["fantasycalc"] > 0
+    full_dp = len(dp_scaled) >= FULL_LIST and w["dynastyprocess"] > 0
     rows = []
     for pid in set(model_scaled) | set(fc) | set(dp_scaled):
         parts = []
@@ -129,8 +137,12 @@ def build(store: Store, weights: dict | None = None) -> dict:
             parts.append((w["model"], model_scaled[pid]))
         if pid in fc:
             parts.append((w["fantasycalc"], fc[pid]))
+        elif full_fc and pid in model_scaled:
+            parts.append((w["fantasycalc"], 0.0))
         if pid in dp_scaled:
             parts.append((w["dynastyprocess"], dp_scaled[pid]))
+        elif full_dp and pid in model_scaled:
+            parts.append((w["dynastyprocess"], 0.0))
         tw = sum(a for a, _ in parts)
         val = sum(a * b for a, b in parts) / tw if tw else 0.0
         rows.append({

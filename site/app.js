@@ -9,12 +9,8 @@
   const panel = sheet.querySelector(".sheet-panel");
   const POS_ORDER = ["QB", "RB", "WR", "TE", "K", "DEF"];
   const SKILLPOS = ["QB", "RB", "WR", "TE"];
-  // League and Past trades read only the public files; everything else is behind the PIN (vault.json).
-  const PUBLIC_FILES = ["meta", "teams", "history", "trades"];
-  const PRIVATE_FILES = ["rosters", "picks", "activity", "values", "plan", "owners", "finder", "weekly", "schedule", "sim"];
-  const OPEN_TABS = new Set(["league", "trades", "history", "unlock"]);
-  let vault = null;            // the encrypted bundle, when the site is locked
-  const VAULT_KEY = "vaultKey";
+  const FILES = ["meta", "teams", "history", "trades", "rosters", "picks", "activity", "values", "plan", "owners",
+                 "finder", "weekly", "schedule", "sim"];
 
   const state = {
     team: null,            // the team being viewed on Team / Plan, and "Team A" in the trade lab
@@ -22,7 +18,7 @@
     give: new Set(), get: new Set(),
     pickTeam: "all", valOwner: "all", valPos: "ALL", valQuery: "", valLimit: 100,
     valSort: "val", rosterSort: "val", pickSort: "slot",
-    histTeam: "all", histWith: "all", histSort: "new", mgr: null, weekView: "lineup", tradeView: "total", locked: false, afterUnlock: null,
+    histTeam: "all", histWith: "all", histSort: "new", mgr: null, tradeView: "total",
     sort: {},              // per-table column sort: id -> {key, dir}
     lastFocus: null,
   };
@@ -82,27 +78,13 @@
   const getJSON = (f, bust) => fetch(`data/${f}.json${bust ? `?t=${Date.now()}` : ""}`, { cache: bust ? "reload" : "no-cache" })
     .then((r) => (r.ok ? r.json() : null)).catch(() => null);
   async function load(bust = false) {
-    const [pub, v] = await Promise.all([Promise.all(PUBLIC_FILES.map((f) => getJSON(f, bust))), getJSON("vault", bust)]);
-    PUBLIC_FILES.forEach((f, i) => (D[f] = pub[i]));
-    PRIVATE_FILES.forEach((f) => (D[f] = null));
-    vault = v;
-    if (!vault) {                         // no PIN set up: everything is published openly
-      const got = await Promise.all(PRIVATE_FILES.map((f) => getJSON(f, bust)));
-      PRIVATE_FILES.forEach((f, i) => (D[f] = got[i]));
-    } else {
-      const saved = store.get(VAULT_KEY);
-      if (saved) {
-        try { Object.assign(D, await openVault(vault, b64(saved))); } catch { store.set(VAULT_KEY, ""); }
-      }
-    }
-    state.locked = !!vault && !D.values;
-    document.body.classList.toggle("locked", state.locked);
-    document.body.classList.toggle("has-vault", !!vault);
+    const got = await Promise.all(FILES.map((f) => getJSON(f, bust)));
+    FILES.forEach((f, i) => (D[f] = got[i]));
     index();
   }
   function index() {
     judged.clear();
-    if (typeof simCache !== "undefined") { simCache.clear(); simBase = null; tradeOdds.key = null; }
+    if (typeof simCache !== "undefined") { simCache.clear(); simBase = null; tradeOdds.key = null; tradeOdds.base = null; }
     byId = {};
     for (const p of D.values || []) byId[p.id] = { ...p };
     for (const [rid, list] of Object.entries(D.rosters || {})) {
@@ -111,52 +93,10 @@
     byTeamName = {};
     for (const t of teams()) { t.team = (t.team || "").trim(); byTeamName[t.team] = t; }
     if (state.team == null) state.team = Number(store.get("team")) || null;
-    state.weekView = store.get("weekView") || state.weekView;
     state.tradeView = store.get("tradeView") || state.tradeView;
     if (!teamOf(state.team)) state.team = null;
   }
 
-  // ---------------------------------------------------------------- PIN lock (see dynasty/vault.py)
-  const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
-  const toB64 = (u8) => btoa(String.fromCharCode(...u8));
-  async function deriveKey(pin, v) {
-    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveBits"]);
-    const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: b64(v.salt), iterations: v.iter, hash: "SHA-256" }, base, 256);
-    return new Uint8Array(bits);
-  }
-  async function openVault(v, raw) {
-    const key = await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["decrypt"]);
-    const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64(v.iv) }, key, b64(v.ct));
-    const text = await new Response(new Blob([plain]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
-    return JSON.parse(text);
-  }
-  async function unlock(pin) {
-    const raw = await deriveKey(pin, vault);
-    const files = await openVault(vault, raw);      // throws on a wrong PIN
-    Object.assign(D, files);
-    store.set(VAULT_KEY, toB64(raw));
-    state.locked = false;
-    document.body.classList.remove("locked");
-    index();
-  }
-  function lockDevice() {
-    store.set(VAULT_KEY, "");
-    PRIVATE_FILES.forEach((f) => (D[f] = null));
-    state.locked = !!vault;
-    document.body.classList.toggle("locked", state.locked);
-    index();
-  }
-  function renderUnlock() {
-    const want = state.afterUnlock && !OPEN_TABS.has(state.afterUnlock) ? TITLES[state.afterUnlock] : null;
-    return `
-      <form class="unlock" id="unlock-form" autocomplete="off">
-        <h2>Enter your PIN</h2>
-        <p class="note">${want ? `${esc(want)} is` : "Everything beyond League and Past trades is"} for the league owner. This device remembers the PIN once it's right.</p>
-        <input id="pin" class="pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" aria-label="PIN" placeholder="••••••">
-        <button class="btn primary block" type="submit">Unlock</button>
-        <p class="note pin-msg" id="pin-msg" role="alert"></p>
-      </form>`;
-  }
 
   const setTeam = (rid) => { state.team = rid; store.set("team", rid ?? ""); };
   const focusTeam = () => state.team ?? standings()[0]?.roster_id ?? null;
@@ -259,7 +199,7 @@
     const cols = [
       { key: "rank", label: "#", value: (t) => rankOf.get(t.roster_id), html: (t) => rankOf.get(t.roster_id) },
       { key: "team", label: "Team", value: (t) => t.team.toLowerCase(),
-        html: (t) => `${state.locked ? `<span class="tname">${esc(t.team)}</span>` : `<a class="tname" href="#team" data-roster="${t.roster_id}">${esc(t.team)}</a>`}<span class="sub2"><span class="user">@${esc(t.owner)}</span>${winChip(t.window)}</span>` },
+        html: (t) => `<a class="tname" href="#team" data-roster="${t.roster_id}">${esc(t.team)}</a><span class="sub2"><span class="user">@${esc(t.owner)}</span>${winChip(t.window)}</span>` },
       { key: "wl", label: "W–L", num: 1, value: (t) => t.wins + 0.5 * (t.ties || 0) + t.pf / 1e5, html: record },
       { key: "pf", label: "PF", num: 1, wide: 1, value: (t) => t.pf, html: (t) => fmt(t.pf, 1) },
       { key: "po", label: "Playoffs", num: 1, value: (t) => t.p_playoffs, html: (t) => pct(t.p_playoffs) },
@@ -268,7 +208,6 @@
       { key: "faab", label: "FAAB", num: 1, wide: 1, value: (t) => t.faab_left, html: (t) => `$${fmt(t.faab_left)}` },
     ];
     return `
-      ${state.locked ? `<div class="unlock-row"><a class="unlock-btn" href="#unlock"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 11V8a5 5 0 0 1 10 0v3M5 11h14v10H5z"/></svg>Unlock</a></div>` : ""}
       ${board([
         { v: week ? `Wk ${week}` : "–", l: week ? `${plural(Math.max(0, lastReg - week + 1), "regular-season week")} left` : "Season not started" },
         { v: `Wk ${s.trade_deadline ?? "–"}`, l: "Trade deadline" },
@@ -503,7 +442,6 @@
     const W = wk();
     if (!W.week) return `<div class="empty"><b>No games this week</b>Lineup checks, matchup odds and waiver picks show up here during the season.</div>`;
     const rid = focusTeam();
-    state.weekView = v;
     return `
       ${teamPicker()}
       <p class="note wk-head">${W.phase === "playoffs" ? "Playoffs, w" : "W"}eek ${W.week}. Projections updated ${ago(W.made)}.</p>
@@ -581,7 +519,7 @@
       <h2>Strength of schedule</h2>
       <div class="sched-table">${sortableTable("sos", cols, rows, { key: "sosl", dir: -1 }, (x) => (x.rid === rid ? "me" : ""))}</div>
       ${how("How strength of schedule works", [
-        `<b>SOS past</b>: the average weekly score of the teams each team has played, minus the league average${S.league_avg ? ` (${f1(S.league_avg)})` : ""}. Positive means tougher opponents. The rank next to it is 1st for the toughest.`,
+        `<b>SOS past</b>: the average weekly score of the teams each team has played, minus the average of the other teams in the league (a team never plays itself, so its own scoring is left out). Positive means tougher opponents. The rank next to it is 1st for the toughest.`,
         `<b>SOS left</b>: the same for the games still to play, using each opponent's projected weekly score from the season simulation (this season's scoring blended with their best projected lineup; this week uses the Week tab's lineup projections). Win odds per game come from both teams' projections and how much scores swing week to week.`,
         `<b>All-play</b>: the record a team would have if it played every other team every week. <b>Luck</b> is actual wins minus the wins that all-play rate would give over the same games: positive means the schedule has helped. <b>Proj W</b> (projected wins) is wins so far plus expected wins in the games left.`,
       ])}`;
@@ -777,7 +715,7 @@
   // ---------------------------------------------------------------- Trade lab
   // Mirrors dynasty/trade.py: package value (sum v^P)^(1/P), P fitted to this league's trades
   // (owners.fit_package, 1.3 by default); best-lineup PPG for 3 horizons.
-  const FAIR = 0.10;
+  const FAIR = 0.10, FAIR_EST = 0.25;   // even within 10% (25% at estimated values of the day)
   const pkgP = () => D.meta?.package?.p || 1.3;
   const FLEX = { FLEX: ["RB", "WR", "TE"], SUPER_FLEX: ["QB", "RB", "WR", "TE"], REC_FLEX: ["WR", "TE"], WRRB_FLEX: ["WR", "RB"] };
   const pkgValue = (vals) => {
@@ -858,7 +796,8 @@
   // later seasons a little more for rebuilders and a little less for teams going for it.
   function teamWeights(t) {
     const key = (D.plan || {})[t?.roster_id]?.strategy?.key;
-    return { now: 0.4 + 1.2 * (t?.p_playoffs || 0), later: ["reload", "rebuild"].includes(key) ? 1.1 : ["sustain", "allin", "run"].includes(key) ? 0.9 : 1 };
+    const now = D.meta?.trades_count_now === false ? 0 : 0.4 + 1.2 * (t?.p_playoffs || 0);
+    return { now, later: ["reload", "rebuild"].includes(key) ? 1.1 : ["sustain", "allin", "run"].includes(key) ? 0.9 : 1 };
   }
   function assetWorth(k, w) {
     const pk = pickByKey(k);
@@ -888,7 +827,7 @@
   // random draws depend only on his id and the week, so moving him in a trade changes who starts him,
   // not his luck: before/after odds differ only because of the trade.
   const SIM_N = 2000;
-  const FLEX_OK = { FLEX: ["RB", "WR", "TE"], SUPER_FLEX: ["QB", "RB", "WR", "TE"], REC_FLEX: ["WR", "TE"], WRRB_FLEX: ["RB", "WR"] };
+  const FLEX_OK = FLEX;
   function hashStr(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
   function rng32(seed) {
     let a = seed >>> 0;
@@ -945,10 +884,10 @@
     const game = (a, b, r) => (score(a, r) >= score(b, r) ? [a, b] : [b, a]);
     const idx = (t) => seeds.indexOf(t);
     if (seeds.length === 6) {
+      // Sleeper's fixed bracket: the 1 seed meets the 4/5 winner, the 2 seed the 3/6 winner
       const [w1, l1] = game(seeds[2], seeds[5], 0), [w2, l2] = game(seeds[3], seeds[4], 0);
-      const low = [w1, w2].sort((x, y) => idx(y) - idx(x));
-      const [sw1, sl1] = game(seeds[0], low[0], 1), [sw2, sl2] = game(seeds[1], low[1], 1);
-      const [c, ru] = game(sw1, sw2, 2), [th, fo] = game(sl1, sl2, 2), [fi, si] = game(l1, l2, 2);
+      const [sw1, sl1] = game(seeds[0], w2, 1), [sw2, sl2] = game(seeds[1], w1, 1), [fi, si] = game(l1, l2, 1);
+      const [c, ru] = game(sw1, sw2, 2), [th, fo] = game(sl1, sl2, 2);
       return [c, ru, th, fo, fi, si];
     }
     let rnd = seeds.slice(), r = 0;
@@ -1011,26 +950,55 @@
     for (const rid of rids) { out[rid].playoffs /= SIM_N; out[rid].title /= SIM_N; }
     return out;
   }
-  function tradeOdds(A, B) {
+  function tradeMoves(A, B) {
     const S = D.sim;
-    if (!S || !S.weeks?.length || !(S.week <= S.last_regular_week)) return null;
+    if (!S || !S.weeks?.length || !(S.week <= S.last_regular_week) || D.meta?.trades_count_now === false) return null;
     const moved = {};
     for (const k of state.give) if (S.players[k]) moved[k] = B;
     for (const k of state.get) if (S.players[k]) moved[k] = A;
-    if (!Object.keys(moved).length) return null;
+    return Object.keys(moved).length ? moved : null;
+  }
+  function tradeOdds(A, B) {
+    const moved = tradeMoves(A, B);
+    if (!moved) return null;
     const key = JSON.stringify(moved);
     if (tradeOdds.key === key) return tradeOdds.val;
-    const before = seasonOdds({}), after = seasonOdds(moved);
+    tradeOdds.base ||= seasonOdds({});       // the no-trade baseline never changes between ticks
+    const before = tradeOdds.base, after = seasonOdds(moved);
     tradeOdds.key = key;
     tradeOdds.val = { before, after };
     return tradeOdds.val;
   }
 
+  // This-season odds take a few hundred milliseconds on a phone, so they're worked out after the
+  // result is on screen (and only for the latest selection) instead of blocking every tick.
+  function oddsTable(a, b, deferred) {
+    const moved = tradeMoves(a, b);
+    if (!moved) return "";
+    if (deferred && tradeOdds.key !== JSON.stringify(moved)) {
+      clearTimeout(oddsTable.timer);
+      oddsTable.timer = setTimeout(() => {
+        const slot = document.getElementById("odds-slot");
+        if (slot) slot.innerHTML = oddsTable(a, b, false);
+      }, 120);
+      return `<p class="note">Working out this season's playoff and title odds…</p>`;
+    }
+    const od = tradeOdds(a, b);
+    if (!od) return "";
+    const row = (rid) => {
+      const x0 = od.before[rid], x1 = od.after[rid];
+      const cell = (x, y) => `<td class="num">${pct(x)} → <b class="${signCls(y - x)}">${pct(y)}</b></td>`;
+      return `<tr><td>${teamHTML(rid)}</td>${cell(x0.playoffs, x1.playoffs)}${cell(x0.title, x1.title)}</tr>`;
+    };
+    return `<table class="mini odds-change"><thead><tr><th>This season</th><th class="num">Playoffs</th><th class="num">Title</th></tr></thead>
+      <tbody>${row(a)}${row(b)}</tbody></table>`;
+  }
   function tradeResult(A, B) {
     const ev = evaluateTrade(A.roster_id, B.roster_id);
     const big = Math.max(ev.giveAdj, ev.getAdj, 1);
     const verdict = ev.verdict === "fair" ? "Fair trade" : ev.verdict === "win" ? `${esc(A.team)} wins by ${fmt(ev.diff)}` : `${esc(B.team)} wins by ${fmt(-ev.diff)}`;
-    const buying = (t) => ["Dynasty power", "Win now"].includes(t.window) || (t.p_playoffs || 0) >= 0.4;
+    const closed = D.meta?.trades_count_now === false;
+    const buying = (t) => !closed && (["Dynasty power", "Win now"].includes(t.window) || (t.p_playoffs || 0) >= 0.4);
     const fit = (t, d) => buying(t)
       ? d[0] > 0.3 ? `${esc(t.team)} is chasing a title (${pct(t.p_playoffs)} playoff odds) and gets ${d[0]} points a week better now.`
                    : `${esc(t.team)} is chasing a title (${pct(t.p_playoffs)} playoff odds) but gets no better now.`
@@ -1046,21 +1014,11 @@
         <table class="mini"><thead><tr><th>Lineup pts/week</th><th class="num">Now</th><th class="num">Next yr</th><th class="num">In 2 yrs</th></tr></thead>
           <tbody><tr><td>${teamHTML(A.roster_id)}</td>${ev.a.map((x) => `<td class="num ${signCls(x)}">${sgn(x)}</td>`).join("")}</tr>
                  <tr><td>${teamHTML(B.roster_id)}</td>${ev.b.map((x) => `<td class="num ${signCls(x)}">${sgn(x)}</td>`).join("")}</tr></tbody></table>
-        <p class="note">${fit(A, ev.a)} ${fit(B, ev.b)}</p>
+        <p class="note">${closed ? "The trade deadline has passed, so a deal now goes through in the offseason: it's judged on next season and later. " : ""}${fit(A, ev.a)} ${fit(B, ev.b)}</p>
         ${[[A, ev.cutA], [B, ev.cutB]].filter(([, c]) => c.n).map(([t, c]) => `<p class="note cut-note"><b>Roster spots:</b> ${esc(t.team)} ends up ${plural(c.n, "player")} over the limit and would cut ${c.players.map((p) => `${esc(p.name)} (${fmt(p.val || 0)})`).join(", ")}; that's taken off what they get.</p>`).join("")}
         <table class="mini worth"><thead><tr><th>Worth to each team</th><th class="num">Gets</th><th class="num">Gives</th><th class="num">Net</th></tr></thead>
           <tbody>${[[A, ev.wA], [B, ev.wB]].map(([t, w]) => `<tr><td>${teamHTML(t.roster_id)}</td><td class="num">${fmt(Math.max(0, w.got))}</td><td class="num">${fmt(w.gave)}</td><td class="num ${signCls(w.got - w.gave)}">${signed(Math.round(w.got - w.gave))}</td></tr>`).join("")}</tbody></table>
-        ${(() => {
-          const od = tradeOdds(A.roster_id, B.roster_id);
-          if (!od) return "";
-          const row = (rid) => {
-            const b = od.before[rid], a = od.after[rid];
-            const cell = (x, y) => `<td class="num">${pct(x)} → <b class="${signCls(y - x)}">${pct(y)}</b></td>`;
-            return `<tr><td>${teamHTML(rid)}</td>${cell(b.playoffs, a.playoffs)}${cell(b.title, a.title)}</tr>`;
-          };
-          return `<table class="mini odds-change"><thead><tr><th>This season</th><th class="num">Playoffs</th><th class="num">Title</th></tr></thead>
-            <tbody>${row(A.roster_id)}${row(B.roster_id)}</tbody></table>`;
-        })()}
+        <div id="odds-slot">${oddsTable(A.roster_id, B.roster_id, true)}</div>
       </div>`;
   }
   function renderTrade() {
@@ -1106,8 +1064,8 @@
         </div>`).join("") || `<div class="empty">No fair deals found${A ? " for this team" : ""}.</div>`}</div>
       ${selected ? `<button class="tray" type="button" data-totop="1"><span>${esc(A?.team || "Team A")} <b>${fmt(pkgValue([...state.give].map(assetValue)))}</b>, ${esc(B?.team || "Team B")} <b>${fmt(pkgValue([...state.get].map(assetValue)))}</b></span><span>${A && B ? "See result" : "Choose teams"}</span></button>` : ""}
       ${how("How trades are judged", [
-        `A package is worth less than the sum of its parts, because only so many players start: two equal players count as ${f1(Math.pow(2, 1 / pkgP()))} of one. That rate is fitted to this league's own trades${D.meta?.package?.trades ? ` (${D.meta.package.trades} trades with two or more pieces on a side, at the values of their day)` : ""}. A trade is fair within 10%. A side that ends up over the roster limit loses the value of the players it would have to cut.`,
-        `Worth to each team weighs each player's value by when it comes: the part from this season counts by the team's playoff odds (from 0.4 for a team that's out to 1.6 for a lock), later seasons count a little more for rebuilding teams and a little less for teams going for it. Picks are all later value. The same trade can help both teams.`,
+        `A package is worth less than the sum of its parts, because only so many players start: two equal players count as ${f1(Math.pow(2, 1 / pkgP()))} of one. ${(D.meta?.package?.trades || 0) >= (D.meta?.package?.needed || 30) ? `That rate is fitted to this league's own trades (${D.meta.package.trades} with two or more pieces on a side, at the values of their day).` : `Once this league has ${D.meta?.package?.needed || 30} trades with two or more pieces on a side made since daily values began (${D.meta?.package?.trades || 0} so far), the rate is fitted to them.`} A trade is fair within 10%. A side that ends up over the roster limit loses the value of the players it would have to cut; suggested trades count that too.`,
+        `Worth to each team weighs each player's value by when it comes: the part from this season counts by the team's playoff odds (from 0.4 for a team that's out to 1.6 for a lock; nothing once the trade deadline has passed, since a deal then waits for the offseason), later seasons count a little more for rebuilding teams and a little less for teams going for it. Picks are all later value. The same trade can help both teams.`,
         `This-season odds come from ${SIM_N.toLocaleString()} simulated seasons, player by player: each week every player plays or not (byes, injuries), each team starts its best available players, and each starter's score varies around his projection. The trade is applied and the same seasons replayed, so the change in playoff and title odds is the trade's effect.`,
         `Lineup change compares each team's best possible starting lineup before and after, in points per week: now (injured players left out), next season, and in two seasons.`,
         `Suggestions are worked out for every team: fair deals that move the team toward its window and help the partner's. Teams chasing the playoffs must get better now, everyone else over the next two seasons.`,
@@ -1119,7 +1077,7 @@
   const BUYERS = new Set(["sustain", "allin", "run"]);
   const daysAgo = (ms) => (ms ? Math.max(0, Math.round((Date.now() - ms) / 86400000)) : null);
   const agoText = (d) => (d == null ? "no moves yet" : d === 0 ? "today" : d === 1 ? "yesterday" : `${d} days ago`);
-  const posList = (o) => Object.entries(o || {}).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(", ") || "none";
+  const posList = (o, none = "none") => Object.entries(o || {}).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${esc(k)} ${esc(v)}`).join(", ") || none;
   const MOVE_NAME = { trade: "trade", waiver: "waiver claim", free_agent: "free-agent add", commissioner: "commissioner move" };
 
   // Plain-language advice for approaching a manager, from their plan, needs and trade history.
@@ -1201,7 +1159,6 @@
     const types = e.league_types || {};
     const where = [types.dynasty ? plural(types.dynasty, "dynasty or keeper league") : "", types.redraft ? plural(types.redraft, "redraft league") : ""].filter(Boolean).join(" and ");
     if (!e.trades) return `<h2>In their other leagues</h2><p class="note">No trades in their ${where} on Sleeper.</p>`;
-    const posList = (o) => Object.entries(o || {}).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(", ") || "–";
     const statRow = (label, value, note = "") => `<div class="stat"><span>${label}</span><b>${value}</b>${note ? `<small>${note}</small>` : ""}</div>`;
     const pk = e.picks || {}, pc = e.pieces || {}, tm = e.timing || {};
     const ages = e.got_age != null && e.gave_age != null ? `${e.got_age} / ${e.gave_age}` : "–";
@@ -1217,8 +1174,8 @@
           ${statRow("When", `${tm.in_season || 0} / ${tm.offseason || 0}`, "in season / offseason")}
         </div>
         <dl class="facts">
-          <dt>Gets</dt><dd>${posList(e.got_pos)}</dd>
-          <dt>Gives</dt><dd>${posList(e.gave_pos)}</dd>
+          <dt>Gets</dt><dd>${posList(e.got_pos, "–")}</dd>
+          <dt>Gives</dt><dd>${posList(e.gave_pos, "–")}</dd>
         </dl>
       </div>`;
   }
@@ -1248,7 +1205,7 @@
       <section class="mgr-head">
         <p class="who">${esc(t?.team || p.team)}${userTag(p.owner)} ${winChip(p.window)}</p>
         <h2>${esc(P?.strategy?.title || "Manager")}</h2>
-        <p class="lede">${t ? `${record(t)}, ${pct(t.p_playoffs)} playoff odds. ` : ""}Last move ${agoText(d)}${sc.last_move_type ? ` (${MOVE_NAME[sc.last_move_type] || sc.last_move_type})` : ""}; ${plural(sc.moves_30d || 0, "move")} in the last 30 days.</p>
+        <p class="lede">${t ? `${record(t)}, ${pct(t.p_playoffs)} playoff odds. ` : ""}Last move ${agoText(d)}${sc.last_move_type ? ` (${esc(MOVE_NAME[sc.last_move_type] || sc.last_move_type)})` : ""}; ${plural(sc.moves_30d || 0, "move")} in the last 30 days.</p>
         ${(p.tags || []).length ? `<div class="tags">${p.tags.map((x) => `<span class="tag">${esc(x)}</span>`).join("")}</div>` : ""}
         <div class="mgr-actions">
           <button class="btn primary" data-tradewith="${p.roster_id}">Build a trade with them</button>
@@ -1308,7 +1265,7 @@
           ${sc.rookie_score != null ? `<p class="note">Their picks are worth ${Math.round(sc.rookie_score * 100)}% of what the league's picks in the same rounds are worth today.</p>` : ""}
           <dl class="facts" style="margin-top:8px">
             <dt>Waivers</dt><dd>${p.waiver_adds} claims, ${p.fa_adds} free-agent adds, $${fmt(p.faab_spent)} FAAB this season${p.max_bid ? ` (top bid $${fmt(p.max_bid)})` : ""}</dd>
-            ${Object.keys(p.draft_mix_other_leagues || {}).length ? `<dt>Elsewhere</dt><dd>Early picks in ${p.other_leagues} other leagues: ${Object.entries(p.draft_mix_other_leagues).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${Math.round(v * 100)}%`).join(", ")}</dd>` : ""}
+            ${Object.keys(p.draft_mix_other_leagues || {}).length ? `<dt>Elsewhere</dt><dd>Early picks in ${p.other_leagues} other leagues: ${Object.entries(p.draft_mix_other_leagues).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${esc(k)} ${Math.round(v * 100)}%`).join(", ")}</dd>` : ""}
           </dl>
         </div>
       </div>`;
@@ -1347,14 +1304,17 @@
   const TRADE_VIEWS = [
     ["total", "Results so far", "What each team got out of the trade: points its new players scored in its starting lineup, plus the value they have left (or had when the team moved them on)."],
     ["today", "Today's value", "Everything each team got, at today's values, wherever those players are now."],
-    ["day", "On the day", "Everything at the values of the day the trade was made: was it fair when it was struck? Trades before October 2026 use the model's rankings from that day (marked estimated)."],
+    ["day", "On the day", "Everything at the values of the day the trade was made: was it fair when it was struck? Trades before October 2026 use the model's rankings from that day (marked estimated, and even within 25%)."],
   ];
   const involves = (tr, rid) => tr.sides.some((sd) => sd.roster_id === rid);
   const sideOf = (tr, rid) => tr.sides.findIndex((sd) => sd.roster_id === rid);
   const sideName = (sd) => (sd.roster_id != null ? teamHTML(sd.roster_id) : `${esc(sd.team)}${userTag(sd.owner)} <span class="muted">(left the league)</span>`);
   const tradeDate = (tr) => (tr.ts ? new Date(tr.ts).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "");
   const signed = (x) => `${x > 0 ? "+" : x < 0 ? "−" : ""}${fmt(Math.abs(x))}`;
-  const assetVal = (a, view) => (a.k === "faab" ? null : view === "today" ? (a.today ?? a.value) : view === "day" ? a.day : a.value);
+  // "once": results so far with each traded-on asset at its value when it left, so adding up a
+  // team's trades counts each later trade once (trade trees would count it again)
+  const assetVal = (a, view) => (a.k === "faab" ? null : view === "today" ? (a.today ?? a.value)
+    : view === "day" ? a.day : view === "once" ? (a.once ?? a.value) : a.value);
   const pkgSum = (vals) => pkgValue(vals.length === 1 ? [Math.max(0, vals[0])] : vals);
   // Judge a trade under one view: per side got/gave/net, plus even/winner/margin. null if values are missing.
   const judged = new Map();
@@ -1363,14 +1323,23 @@
     if (judged.has(key)) return judged.get(key);
     const assets = tr.sides.flatMap((sd) => sd.got.filter((a) => a.k !== "faab"));
     let res = null;
-    if (!assets.some((a) => assetVal(a, view) == null)) {
+    if (assets.length && !assets.some((a) => assetVal(a, view) == null)) {
+      // package what each side got from each other side on its own (mirrors owners._sides_net):
+      // that package is what the sender gave, so a three-team trade nets to zero
+      const pk = new Map();
+      tr.sides.forEach((sd, i) => {
+        const byFrom = new Map();
+        for (const a of sd.got) if (a.k !== "faab" && a.from != null) byFrom.set(a.from, [...(byFrom.get(a.from) || []), assetVal(a, view)]);
+        for (const [j, vs] of byFrom) pk.set(`${j}>${i}`, pkgSum(vs));
+      });
+      const sumBy = (f) => [...pk].reduce((x, [k, v]) => x + (f(k.split(">").map(Number)) ? v : 0), 0);
       const sides = tr.sides.map((sd, i) => {
-        const got = Math.round(pkgSum(sd.got.filter((a) => a.k !== "faab").map((a) => assetVal(a, view))));
-        const gave = Math.round(pkgSum(tr.sides.flatMap((o) => o.got.filter((a) => a.k !== "faab" && a.from === i)).map((a) => assetVal(a, view))));
+        const got = Math.round(sumBy(([, to]) => to === i)), gave = Math.round(sumBy(([fr]) => fr === i));
         return { got, gave, net: got - gave };
       });
       const big = Math.max(1, ...sides.map((x) => x.got));
-      const even = sides.every((x) => Math.abs(x.net) <= FAIR * big);
+      const band = view === "day" && tr.day?.est ? FAIR_EST : FAIR;
+      const even = sides.every((x) => Math.abs(x.net) <= band * big);
       const best = sides.reduce((b, x, i) => (x.net > sides[b].net ? i : b), 0);
       res = { sides, even, winner: even ? null : best, margin: sides[best].net };
     }
@@ -1401,6 +1370,7 @@
       a.starts ? `, ${plural(a.starts, "start")} for them` : "",
       a.titles?.length ? ` <span class="title-badge" title="Started in their title run">Title ${a.titles.join(", ")}</span>` : "",
       a.left?.valued === "tree" ? `, traded on for ${esc((a.left.got || []).join(", ") || "something")}${a.left.share < 0.995 ? ` (${pct(a.left.share)} of that haul)` : ""}` : "",
+      a.left?.how === "dropped" ? ", dropped later" : "",
     ].join("") : view === "day" && a.day_est ? ", estimated" : "";
     if (a.k === "player") {
       return row(a.id, `<span class="dot ${esc(a.pos || "")}">${esc(a.pos || "?")}</span>`, esc(a.name), `${whereNow(a.now_on, receiver)}${starts}`);
@@ -1459,6 +1429,7 @@
     let list = all;
     if (tid != null) list = list.filter((tr) => involves(tr, tid));
     if (wid != null) list = list.filter((tr) => involves(tr, wid));
+    const sumView = view === "total" ? "once" : view;     // totals count each later trade once
     const net = (tr) => (tid != null ? judge(tr, view).sides[sideOf(tr, tid)].net : Math.abs(judge(tr, view).margin));
     const sorters = {
       new: (a, b) => (b.ts || 0) - (a.ts || 0),
@@ -1475,8 +1446,8 @@
 
     let summary = "";
     if (list.length && tid != null) {
-      const res = list.map((tr) => outcome(judge(tr, view), sideOf(tr, tid)));
-      const total = list.reduce((x, tr) => x + judge(tr, view).sides[sideOf(tr, tid)].net, 0);
+      const res = list.map((tr) => outcome(judge(tr, sumView) || judge(tr, view), sideOf(tr, tid)));
+      const total = list.reduce((x, tr) => x + (judge(tr, sumView) || judge(tr, view)).sides[sideOf(tr, tid)].net, 0);
       const picksIn = list.reduce((x, tr) => x + tr.sides[sideOf(tr, tid)].got.filter((a) => a.k === "pick").length, 0);
       const picksOut = list.reduce((x, tr) => x + tr.sides.reduce((y, sd) => y + sd.got.filter((a) => a.k === "pick" && a.from === sideOf(tr, tid)).length, 0), 0);
       summary = board([
@@ -1511,11 +1482,12 @@
       ${summary}
       <div class="tlist">${list.map((tr) => tradeCard(tr, tid, view)).join("") || empty}</div>
       ${how("How past trades are judged", [
-        `<b>Results so far</b> counts what each team actually got out of the deal. For each player: what his starts added to that team's lineup after the trade, compared with the player he pushed to the bench (the backup at his position with the best average so far that season, or a replacement-level starter if the bench had nobody that good), turned into value at the rate the model uses. Playoff starts count double, and starts in the champion's title run count triple (marked "Title").`,
-        `Then what he's still worth: today's value while he's on the team. If the team traded him on, he's worth his share of what that later trade brought back (and so on down the chain), so a player flipped for a star gets credit for the star. If the team dropped him, his value on the day he was dropped. A player who retires keeps what he banked, so trading for an aging star isn't marked as a loss once he's done.`,
-        `<b>Today's value</b> counts everything at today's values, wherever the players are now. <b>On the day</b> uses the values saved on the day of the trade, which shows whether the deal was fair when it was made. Values have been saved daily since October 2026; for older trades the model is re-run with only the data that existed that day, and each player gets the value of his rank that day on today's scale (marked estimated). Picks in older trades use the average value of picks in that round, or the slot's value once the draft order was set.`,
+        `<b>Results so far</b> counts what each team actually got out of the deal. For each player: what his starts added to that team's lineup after the trade, compared with the player he kept on the bench (the backup with the best average so far that season, at his position or, for a flex player, any flex position; a replacement-level starter if the bench had nobody that good), turned into value at the rate the model uses. Starts in winners-bracket games count double, and starts in the champion's title run triple (marked "Title"). A player who started over better options can bank less than nothing.`,
+        `Then what he's still worth: today's value while he's on the team. If the team traded him on, he's worth his share of what that later trade brought back (and so on down the chain), so a player flipped for a star gets credit for the star. A dropped player brings nothing back. A player who retires keeps what he banked, so trading for an aging star isn't marked as a loss once he's done.`,
+        `A team's totals (record and net value above, and on the Managers tab) count a player who was traded on at his value when he left, not at what the later trade brought back, so each later trade counts once: in that trade's own card.`,
+        `<b>Today's value</b> counts everything at today's values, wherever the players are now; a pick shows the player taken with it. <b>On the day</b> uses the values saved on the day of the trade, which shows whether the deal was fair when it was made. Values have been saved daily since October 2026; for older trades the model is re-run with only the data that existed that day, and each player gets the value of his rank that day on today's scale. Those estimates are rough, so such a trade counts as even within 25%, and one with a player the model couldn't value that day isn't judged at all. Picks in older trades use the average value of picks in that round, or the slot's value once the draft order was set.`,
         `Draft picks: a pick a team used counts as the player it took. A pick a team passed on before the draft counts as what it was traded for, or else at what that slot turned out to be worth (players taken within three picks of it), since another team made the choice. A pick not yet used counts at its pick value.`,
-        `Each side's haul is combined as in the trade lab: two equal pieces count as ${f1(Math.pow(2, 1 / pkgP()))} of one, a rate fitted to this league's trades. A trade is even when every side is within 10%. FAAB is shown but not valued.`,
+        `Each side's haul is combined as in the trade lab: two equal pieces count as ${f1(Math.pow(2, 1 / pkgP()))} of one, and in a three-team trade each pair of teams is packaged separately. A trade is even when every side is within 10%. FAAB is shown but not valued; FAAB-for-FAAB swaps aren't judged.`,
       ])}`;
   }
 
@@ -1593,12 +1565,14 @@
         <button class="btn block" style="margin-top:8px" data-shop="${esc(p.id)}">Shop him for ${esc(teamOf(p.owner)?.team || "his team")}</button>` : ""}`;
     sheet.hidden = false;
     document.body.style.overflow = "hidden";
+    for (const el of document.querySelectorAll("body > :not(#sheet)")) el.inert = true;   // modal: page behind can't be reached
     panel.focus();
   }
   function closeSheet() {
     if (sheet.hidden) return;
     sheet.hidden = true;
     document.body.style.overflow = "";
+    for (const el of document.querySelectorAll("body > :not(#sheet)")) el.inert = false;
     state.lastFocus?.focus?.();
   }
 
@@ -1619,12 +1593,10 @@
     { key: "values", label: "Values", tabs: [["values", "Players"], ["picks", "Draft picks"], ["activity", "Moves"]] },
   ];
   const sectionOf = (tab) => SECTIONS.find((sec) => sec.tabs.some(([k]) => k === tab)) || SECTIONS[0];
-  const canSee = (tab) => !state.locked || OPEN_TABS.has(tab);
   function navs() {
     const items = SECTIONS.map((sec) => {
-      const first = sec.tabs.find(([k]) => canSee(k));
-      return first ? { ...sec, href: first[0] } : null;
-    }).filter(Boolean);
+      return { ...sec, href: sec.tabs[0][0] };
+    });
     document.querySelector(".tabs").innerHTML = items.map((sec) =>
       `<a href="#${sec.href}" data-section="${sec.key}">${sec.label}</a>`).join("");
     document.querySelector(".tabbar").innerHTML = items.map((sec) =>
@@ -1632,33 +1604,40 @@
   }
   function subnav(key) {
     const sec = sectionOf(key);
-    const tabs = sec.tabs.filter(([k]) => canSee(k));
+    const tabs = sec.tabs;
     if (tabs.length < 2) return "";
     return `<nav class="subnav" aria-label="${esc(sec.label)}">${tabs.map(([k, l]) =>
       `<a href="#${k}" class="${k === key ? "on" : ""}" ${k === key ? 'aria-current="page"' : ""}>${l}</a>`).join("")}</nav>`;
   }
-  const TABS = { league: renderLeague, week: () => renderWeek("lineup"), matchups: () => renderWeek("matchups"), waivers: () => renderWeek("waivers"), schedule: renderSchedule, team: renderTeam, values: renderValues, picks: renderPicks, plan: renderPlan, trade: renderTrade, trades: renderPastTrades, owners: renderOwners, activity: renderActivity, history: renderHistory, unlock: renderUnlock };
-  const TITLES = { league: "Standings", week: "Lineup", matchups: "Matchups", waivers: "Waivers", schedule: "Schedule", team: "Roster", values: "Player values", picks: "Draft picks", plan: "Plan", trade: "Trade", trades: "Past trades", owners: "Managers", activity: "Moves", history: "Champions", unlock: "Unlock" };
+  const TABS = { league: renderLeague, week: () => renderWeek("lineup"), matchups: () => renderWeek("matchups"), waivers: () => renderWeek("waivers"), schedule: renderSchedule, team: renderTeam, values: renderValues, picks: renderPicks, plan: renderPlan, trade: renderTrade, trades: renderPastTrades, owners: renderOwners, activity: renderActivity, history: renderHistory };
+  const TITLES = { league: "Standings", week: "Lineup", matchups: "Matchups", waivers: "Waivers", schedule: "Schedule", team: "Roster", values: "Player values", picks: "Draft picks", plan: "Plan", trade: "Trade", trades: "Past trades", owners: "Managers", activity: "Moves", history: "Champions" };
   const FIRST_DIR = { rank: 1, team: 1, age: 1, champ: 1 };   // first tap: ascending for these, descending otherwise
   function route(keepScroll = false) {
     const y = window.scrollY;
     const tab = (location.hash || "#league").slice(1);
     let key = TABS[tab] ? tab : "league";
-    if (state.locked && !OPEN_TABS.has(key)) { state.afterUnlock = key; key = "unlock"; }
-    if (!state.locked && key === "unlock") key = "league";
     navs();
-    view.innerHTML = D.meta ? (key === "unlock" ? "" : subnav(key)) + TABS[key]() : `<div class="empty"><b>Couldn't load league data</b>Check your connection, then tap the reload button at the top.</div>`;
+    view.innerHTML = D.meta ? subnav(key) + TABS[key]() : `<div class="empty"><b>Couldn't load league data</b>Check your connection, then tap the reload button at the top.</div>`;
     document.body.classList.toggle("has-tray", key === "trade" && (state.give.size > 0 || state.get.size > 0));
-    const sec = key === "unlock" ? null : sectionOf(key).key;
+    const sec = sectionOf(key).key;
     document.querySelectorAll("[data-section]").forEach((a) => {
       const on = a.dataset.section === sec;
       a.classList.toggle("on", on);
       if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
     });
     document.title = `${TITLES[key]} · Dynasty Analyzer`;
+    if (!keepScroll) document.getElementById("status").textContent = TITLES[key];   // announce page changes
     window.scrollTo(0, keepScroll ? y : 0);
   }
-  const rerender = () => route(true);
+  // Re-render in place and put keyboard focus back where it was (the view is rebuilt from HTML)
+  function rerender() {
+    const el = document.activeElement;
+    const sel = el && el !== document.body && view.contains(el)
+      ? (el.id ? `#${CSS.escape(el.id)}` : [...el.attributes].filter((a) => a.name.startsWith("data-")).map((a) => `[${a.name}="${CSS.escape(a.value)}"]`).join("") || null)
+      : null;
+    route(true);
+    if (sel) view.querySelector(sel)?.focus({ preventScroll: true });
+  }
   const refreshValues = () => { document.getElementById("val-list").innerHTML = valuesList(); };
 
   document.addEventListener("click", (e) => {
@@ -1716,8 +1695,6 @@
     if (sct) { setTeam(Number(sct.dataset.schteam)); rerender(); window.scrollTo(0, 0); return; }
     const wkt = t.closest("[data-wkteam]");
     if (wkt) { setTeam(Number(wkt.dataset.wkteam)); location.hash = "#week"; route(); return; }
-    const wv = t.closest("[data-wv]");
-    if (wv) { state.weekView = wv.dataset.wv; store.set("weekView", state.weekView); rerender(); }
     const vp = t.closest("[data-vp]");
     if (vp) { state.valPos = vp.dataset.vp; state.valLimit = 100; rerender(); }
     if (t.closest("[data-more]")) { state.valLimit += 100; refreshValues(); }
@@ -1766,30 +1743,6 @@
       case "val-sort": state.valSort = t.value; state.valLimit = 100; refreshValues(); break;
       default: break;
     }
-  });
-  document.addEventListener("submit", async (e) => {
-    if (e.target.id !== "unlock-form") return;
-    e.preventDefault();
-    const input = document.getElementById("pin"), msg = document.getElementById("pin-msg");
-    const pin = (input.value || "").trim();
-    if (!/^\d{4,8}$/.test(pin)) { msg.textContent = "Enter your PIN (digits only)."; input.focus(); return; }
-    msg.textContent = "Checking…";
-    try {
-      await unlock(pin);
-      const to = state.afterUnlock && TABS[state.afterUnlock] ? state.afterUnlock : "week";
-      state.afterUnlock = null;
-      if (location.hash === `#${to}`) route(); else location.hash = `#${to}`;
-    } catch {
-      msg.textContent = "That PIN didn't work. Try again.";
-      input.value = ""; input.focus();
-    }
-  });
-  document.getElementById("lockbtn")?.addEventListener("click", async () => {
-    lockDevice();
-    await load();                    // back to the trimmed open files
-    header();
-    location.hash = "#league";
-    route();
   });
   document.addEventListener("input", (e) => {
     if (e.target.id === "val-search") { state.valQuery = e.target.value; state.valLimit = 100; refreshValues(); }

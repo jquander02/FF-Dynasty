@@ -1,6 +1,6 @@
 // Offline support: the app shell is cached; data is network-first, falling back to the last copy.
-const SHELL = "dynasty-shell-v23";
-const DATA = "dynasty-data-v2";
+const SHELL = "dynasty-shell-v24";
+const DATA = "dynasty-data-v3";
 const SHELL_FILES = ["./", "index.html", "styles.css", "app.js", "manifest.webmanifest",
   "fonts/BigShouldersDisplay.woff", "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
 
@@ -29,8 +29,10 @@ self.addEventListener("fetch", (e) => {
           if (res.ok) {
             const copy = res.clone();
             caches.open(DATA).then((c) => c.put(key, copy));
+            return res;
           }
-          return res;
+          // a server error (e.g. a Pages hiccup): the last good copy beats nothing
+          return res.status >= 500 ? caches.match(key).then((r) => r || res) : res;
         })
         .catch(() => caches.match(key))
     );
@@ -43,8 +45,9 @@ self.addEventListener("fetch", (e) => {
         if (res.ok) {
           const copy = res.clone();
           caches.open(SHELL).then((c) => c.put(e.request, copy));
+          return res;
         }
-        return res;
+        return res.status >= 500 ? caches.match(e.request).then((r) => r || res) : res;
       })
       .catch(() => caches.match(e.request).then((r) => r || caches.match("index.html")))
   );

@@ -79,8 +79,7 @@ def model_values(b: dict, season: int, weeks: int, cfg=None) -> dict:
     left = max(0, cfg.season_games - weeks)
     out = {}
     for g, v in proj.items():
-        parts = model.value_parts(v, repl.get(v["position"], 0.0), share, cfg, left)
-        out[g] = sum(cfg.discounts[i] * x for i, x in enumerate(parts))
+        out[g] = sum(model.discounted(model.value_parts(v, repl.get(v["position"], 0.0), share, cfg, left), left, cfg))
     return out
 
 

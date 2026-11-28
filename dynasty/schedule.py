@@ -151,17 +151,22 @@ def build(store: Store) -> dict:
                          "opp_proj": round(opp_str, 1), "win": round(p, 3),
                          "now": round(pts.get((w, r), 0.0), 2) if w == cur_week else None})
         n = wins + losses + ties
+        # baselines are the other teams' averages: a team never plays itself, so including it
+        # would make a strong team's schedule look easy and a weak team's look hard
+        others_ppg = [v for x, v in season_ppg.items() if x != r and v is not None]
+        base_ppg = statistics.mean(others_ppg) if others_ppg else league_avg
+        base_str = statistics.mean([v for x, v in strength.items() if x != r] or [avg_strength])
         teams[r] = {
             "record": [wins, losses, ties],
             "allplay": [round(ap_w, 1), round(ap_l, 1)],
             "allplay_pct": round(ap_w / (ap_w + ap_l), 3) if ap_w + ap_l else None,
             # wins above what the all-play rate would give over the same games: schedule luck
             "luck": round((wins + 0.5 * ties) - n * ap_w / (ap_w + ap_l), 2) if ap_w + ap_l else None,
-            "sos_played": round(statistics.mean(opp_ppg) - league_avg, 1) if opp_ppg and league_avg else None,
+            "sos_played": round(statistics.mean(opp_ppg) - base_ppg, 1) if opp_ppg and base_ppg else None,
             "opp_ppg": round(statistics.mean(opp_ppg), 1) if opp_ppg else None,
             "pa_pg": round(statistics.mean(against), 1) if against else None,
-            "pa_vs_avg": round(statistics.mean(against) - league_avg, 1) if against and league_avg else None,
-            "sos_left": round(statistics.mean(left_strength) - avg_strength, 1) if left_strength else None,
+            "pa_vs_avg": round(statistics.mean(against) - base_ppg, 1) if against and base_ppg else None,
+            "sos_left": round(statistics.mean(left_strength) - base_str, 1) if left_strength else None,
             "opp_left": round(statistics.mean(left_strength), 1) if left_strength else None,
             "games_left": len(left_strength),
             "exp_wins_left": round(exp_left, 2),

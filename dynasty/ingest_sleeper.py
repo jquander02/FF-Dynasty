@@ -40,6 +40,26 @@ def today() -> str:
 # ---------------------------------------------------------------------------
 # League history chain
 # ---------------------------------------------------------------------------
+def follow_renewals(client: SleeperClient, league_id: str, user_id: str, max_hops: int = 5) -> str:
+    """The newest league in this league's line. Sleeper gives a league a new id each season it
+    renews; the new one points back via previous_league_id, so look through the user's leagues
+    for the next season(s) for one whose previous_league_id is the league we have."""
+    lid = str(league_id)
+    for _ in range(max_hops):
+        league = client.league(lid, ttl=HOUR)
+        if not league:
+            break
+        season = int(league.get("season") or 0)
+        nxt = next((lg for lg in client.user_leagues(user_id, season + 1) or []
+                    if str(lg.get("previous_league_id") or "") == lid), None)
+        if not nxt:
+            break
+        log.warning("League %s renewed as %s for %s; following it (update league_id in config.yaml)",
+                    lid, nxt["league_id"], season + 1)
+        lid = str(nxt["league_id"])
+    return lid
+
+
 def league_chain(client: SleeperClient, league_id: str, max_seasons: int = 25) -> list[dict]:
     """Current league first, then each previous season via previous_league_id."""
     chain, seen = [], set()
@@ -453,8 +473,8 @@ def player_row(pid: str, p: dict) -> dict:
     return row
 
 
-def ingest_players(store: Store, client: SleeperClient) -> int:
-    players = client.players()
+def ingest_players(store: Store, client: SleeperClient, ttl=DAY) -> int:
+    players = client.players(ttl=ttl)
     rows = [player_row(pid, p) for pid, p in players.items()]
     return store.upsert("player", rows)
 
@@ -495,20 +515,27 @@ def ingest_projections(store: Store, client: SleeperClient, season: str, weeks, 
     lg = store.query("SELECT scoring_settings FROM league_season WHERE is_current=1")
     scoring = json.loads(lg[0]["scoring_settings"] or "{}") if lg else {}
     pos = {r["player_id"]: r["position"] for r in store.query("SELECT player_id, position FROM player")}
-    rows = []
+    rows, fetched = [], []
     for week in weeks:
         try:
             got = client.projections(season, week, ttl=ttl_for(week))
         except Exception as exc:  # noqa: BLE001 - unofficial endpoint: never block the refresh
             log.warning("Sleeper projections week %s failed: %s", week, exc)
             continue
+        if not got:
+            continue
+        fetched.append(int(week))
         for pid, st in got.items():
             p = projection_points(st, scoring, pos.get(pid))
             if p is not None:
                 rows.append({"season": str(season), "week": week, "player_id": pid, "pts": p,
                              "pts_sleeper": st.get("pts_ppr")})
     if rows:
-        store.write_frame("sleeper_projection", rows, replace_where=("season=?", (str(season),)))
+        # replace only the weeks just fetched: a failed week keeps its last good projections, and
+        # past weeks stay (the record of what Sleeper projected)
+        marks = ",".join("?" * len(fetched))
+        store.write_frame("sleeper_projection", rows,
+                          replace_where=(f"season=? AND week IN ({marks})", (str(season), *fetched)))
     return len(rows)
 
 
@@ -658,21 +685,21 @@ def run(
     username: str,
     owner_leagues: bool = True,
     players: bool = True,
+    injuries_only: bool = False,
 ) -> IngestResult:
     res = IngestResult()
     state = client.state() or {}
     store.snapshot("state/nfl", state)
-    chain = league_chain(client, league_id)
+    me = client.user(username)
+    if not me:
+        raise SystemExit(f"Sleeper user '{username}' not found.")
+    res.my_user_id = me["user_id"]
+    chain = league_chain(client, follow_renewals(client, league_id, me["user_id"]))
     if not chain:
         raise SystemExit(f"League {league_id} not found on Sleeper.")
     current = chain[0]
     res.current_league_id = current["league_id"]
     res.season = str(current["season"])
-
-    me = client.user(username)
-    if not me:
-        raise SystemExit(f"Sleeper user '{username}' not found.")
-    res.my_user_id = me["user_id"]
 
     for idx, league in enumerate(chain):
         lid = league["league_id"]
@@ -729,6 +756,9 @@ def run(
     if players:
         res.add("players", ingest_players(store, client))
         res.add("trending", ingest_trending(store, client))
+    elif injuries_only:
+        # a quick run shortly before kickoff: fresh injury and inactive news (at most every 6 hours)
+        res.add("players", ingest_players(store, client, ttl=6 * HOUR))
 
     # Sleeper's projections for this week through the end of the playoffs (every run: news moves them)
     if str(state.get("season")) == res.season and state.get("season_type") in ("regular", "post"):

@@ -59,6 +59,8 @@ class ModelConfig:
     regress_games: float = 2.0            # pseudo-games at the position's average PPG (pulls extremes in)
     late_weight: float = 0.0              # weight on the last 6 games of the latest season (tested: no help)
     inseason_weight: float = 1.0          # extra weight on this season's games while it's in progress (tested: 1.0 best)
+    backup_regress: bool = False          # thin veteran samples regress toward backup level (tested 2026-11: slightly worse)
+    vet_play_share: bool = False          # veterans under 10 games use their own playing time (tested 2026-11: rank corr .595 -> .588)
     use_ranges: bool = False              # value from real outcome ranges (fit_outcome_ranges) when available
     td_regress: float = 0.0               # share of touchdowns above/below expectation removed from PPG (tested: no help)
     learned_current: bool = True          # learned corrections for this season's PPG and games (learned.py)
@@ -389,6 +391,16 @@ def project(players: list[dict], seasons: list[dict], curves: dict, prior: dict,
         if current - 1 <= srow["season"] <= current and srow["games"] >= 6 and srow["position"] in POSITIONS:
             pool[srow["position"]].append(srow["ppg"])
     pos_mean = {k: sum(v) / len(v) for k, v in pool.items() if v}
+    # backup level: mean of the bottom 40% of regular contributors. Veterans with little playing
+    # time regress toward it rather than toward the typical starter (a backup QB's two relief
+    # games say little, and what they say is "backup")
+    pos_low = {}
+    for k, v in pool.items():
+        v = sorted(v)[:max(1, int(len(v) * 0.4))]
+        pos_low[k] = sum(v) / len(v)
+    # the current season hasn't started (offseason after the league renewed): it isn't a season
+    # of missed games
+    current_started = any(srow["season"] == current for srow in seasons)
     # league touchdown rates per opportunity, by season and position (for TD regression)
     td_rate = {}
     if cfg.td_regress:
@@ -431,6 +443,8 @@ def project(players: list[dict], seasons: list[dict], curves: dict, prior: dict,
             if debut is None or yr < debut:
                 continue
             srow = ss.get(yr)
+            if yr == current and current_games is None and not current_started:
+                continue
             g_eff = 0.0
             if srow and srow["games"]:
                 g_eff = srow["games"]
@@ -470,6 +484,8 @@ def project(players: list[dict], seasons: list[dict], curves: dict, prior: dict,
         pw = pc.prior_games * (1.0 if young else pc.vet_prior_share)
         rw = pc.regress_games if den > 0 else 0.0
         target = pos_mean.get(pos, prior_ppg)
+        if cfg.backup_regress and not young and pos in pos_low and target:
+            target = pos_low[pos] + (target - pos_low[pos]) * min(1.0, den / cfg.season_games)
         talent = (num + pw * prior_ppg + rw * target) / (den + pw + rw) if (den + pw + rw) else 0.0
 
         def growth(n_from: int, n_to: int) -> float:
@@ -513,7 +529,7 @@ def project(players: list[dict], seasons: list[dict], curves: dict, prior: dict,
 def availability(v: dict, offset: int, share: dict, cfg: ModelConfig) -> float:
     """Share of games a player is expected to play. Young players with little NFL history play as
     often as their draft range typically does (busts and depth players play less)."""
-    if cfg.play_from_history and v.get("play_share") is not None and v["games_history"] >= 10:
+    if cfg.play_from_history and v.get("play_share") is not None and (v["games_history"] >= 10 or (cfg.vet_play_share and v["nfl_year"] > 3)):
         return min(cfg.availability, v["play_share"]) if cfg.play_cap else v["play_share"]
     if not cfg.prior_per_game or v["nfl_year"] > 3 or v["games_history"] >= 10:
         return cfg.availability
@@ -563,15 +579,38 @@ def range_excess(ranges: dict, pos: str, h: int, ppg: float, repl: float, young:
     return sum(max(0.0, ppg * x - repl) for x in rs) / len(rs)
 
 
+NO_TEAM_INSEASON = 0.1     # value kept by a veteran with no NFL team during the season
+NO_TEAM_OFFSEASON = 0.35   # ... and in the offseason, when free agents still sign
+
+
+def discounted(parts: list[float], games_left: float, cfg: "ModelConfig") -> list[float]:
+    """Discount each part by how far away it starts. The window rolls: [rest of this season,
+    +1, +2, +3 seasons, and the share of a 4th season that this season has already used up], so
+    a value doesn't jump when one season ends and the next begins. Discounts follow
+    cfg.discounts by years from now (1.0 now, 0.9 in a year, ...), interpolated."""
+    f = max(0.0, min(1.0, games_left / cfg.season_games)) if cfg.season_games else 0.0
+    d = list(cfg.discounts) + [cfg.discounts[-1] * cfg.discounts[-1] / cfg.discounts[-2]]
+
+    def at(t: float) -> float:
+        i = min(int(t), len(d) - 2)
+        return d[i] + (d[i + 1] - d[i]) * (t - i)
+
+    starts = [0.0, f, 1 + f, 2 + f, 3 + f]
+    return [at(starts[i]) * x for i, x in enumerate(parts)]
+
+
 def value_parts(v: dict, repl: float, share: dict, cfg: ModelConfig, games_left: int,
                 ranges: dict | None = None) -> list[float]:
-    """Expected points above replacement, undiscounted: [rest of this season, +1, +2, +3 seasons].
+    """Expected points above replacement, undiscounted: [rest of this season, +1, +2, +3 seasons,
+    and a 4th season weighted by the share of this season already played (see discounted).
     The projection is treated as a range (wider for young players and later seasons), so a player
     near replacement level still has upside value."""
     scale = cfg.young_uncertainty_scale if (v["nfl_year"] <= 1 and v["games_history"] < 17) else cfg.uncertainty_scale
     cv0 = uncertainty(v["games_history"]) * scale
-    keys = ("ppg_ros", "ppg_y1", "ppg_y2", "ppg_y3")
-    games = (games_left,) + (cfg.season_games,) * 3
+    y3, y2 = v["ppg_y3"], v["ppg_y2"]
+    v = dict(v, ppg_y4=y3 * min(1.0, y3 / y2) if y2 and y2 > 0 else y3)   # keeps declining, never rises
+    keys = ("ppg_ros", "ppg_y1", "ppg_y2", "ppg_y3", "ppg_y4")
+    games = (games_left,) + (cfg.season_games,) * 3 + (cfg.season_games - min(games_left, cfg.season_games),)
     k_pos = (cfg.position_scale or {}).get(v["position"], 1.0)
     young = v["nfl_year"] <= 2
     out = []
@@ -667,6 +706,7 @@ def build(store: Store, cfg: ModelConfig | None = None) -> dict:
     ])
 
     players = []
+    no_team = set()   # veterans without an NFL team: unsigned free agents and the retired
     for p in store.query(
         """SELECT p.player_id, p.full_name, p.position, p.years_exp, p.status, p.team, x.gsis_id,
                   EXISTS(SELECT 1 FROM roster_snapshot rs WHERE rs.player_id=p.player_id) rostered
@@ -676,6 +716,8 @@ def build(store: Store, cfg: ModelConfig | None = None) -> dict:
         if not (p["status"] == "Active" or p["team"] or p["rostered"]):
             continue
         g, pid = p["gsis_id"], p["player_id"]
+        if not p["team"] and (p["years_exp"] or 0) > 0:
+            no_team.add(pid)
         players.append({
             "key": pid, "gsis_id": g, "position": p["position"], "name": p["full_name"],
             "years_exp": p["years_exp"],
@@ -706,12 +748,16 @@ def build(store: Store, cfg: ModelConfig | None = None) -> dict:
         roster_positions, cfg.teams, cfg.replacement_depth,
     )
     for v in proj.values():
-        parts = value_parts(v, repl.get(v["position"], 0.0), share, cfg, remaining)
+        parts = discounted(value_parts(v, repl.get(v["position"], 0.0), share, cfg, remaining), remaining, cfg)
+        if v["player_id"] in no_team:
+            # unsigned: most stay unsigned during the season; in the offseason many still sign
+            parts = [x * (NO_TEAM_INSEASON if state.get("season_type") == "regular" else NO_TEAM_OFFSEASON)
+                     for x in parts]
         v["repl_ppg"] = round(repl.get(v["position"], 0.0), 2)
-        v["model_value"] = round(sum(cfg.discounts[i] * x for i, x in enumerate(parts)), 1)
-        v["model_value_now"] = round(cfg.discounts[0] * parts[0] + cfg.discounts[1] * parts[1], 1)
+        v["model_value"] = round(sum(parts), 1)
+        v["model_value_now"] = round(parts[0] + parts[1], 1)
         # value beyond this season (waiver bids weigh it against this season's lineup gain)
-        v["value_future"] = round(sum(cfg.discounts[i] * x for i, x in enumerate(parts) if i > 0), 1)
+        v["value_future"] = round(sum(parts[1:]), 1)
 
     store.write_frame("player_projection", list(proj.values()))
     store.commit()

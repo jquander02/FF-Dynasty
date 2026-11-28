@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://sleepercdn.com; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Dynasty Analyzer</title>
   <meta name="description" content="Year-round analysis for a Sleeper dynasty league">
@@ -24,16 +25,14 @@
       <h1 id="league-name">Dynasty</h1>
       <p id="league-sub" class="sub">Loading your league…</p>
     </div>
-    <button id="lockbtn" class="icon-btn lock-btn" type="button" aria-label="Lock this device" title="Lock this device">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 11V8a5 5 0 0 1 10 0v3M5 11h14v10H5z"/></svg>
-    </button>
     <button id="refresh" class="icon-btn" type="button" aria-label="Reload data">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5"/></svg>
     </button>
     <nav class="tabs" aria-label="Sections"></nav>
   </header>
 
-  <main id="view" tabindex="-1" aria-live="polite"></main>
+  <main id="view" tabindex="-1"></main>
+  <p id="status" class="sr-only" role="status" aria-live="polite"></p>
 
   <nav class="tabbar" aria-label="Sections"></nav>
 

@@ -366,6 +366,16 @@ class Projector:
             return share * 0.6 * role
         return share * role
 
+    def attrition(self, pid) -> float:
+        """Chance a player Sleeper projects for a later week actually plays it (injuries, rest)."""
+        pos = self.pos(pid)
+        if pos == "DEF":
+            return 1.0
+        if pos == "K":
+            return 0.97
+        share = (self.proj.get(pid) or {}).get("ros_share")
+        return 0.9 if share is None else min(1.0, max(0.5, share))
+
     def range(self, pid, w) -> tuple[float, float] | None:
         """(floor, ceiling): 10th and 90th percentile of his score this week. A player who may not
         play (under 90%) has a floor of 0."""
@@ -408,10 +418,16 @@ class Projector:
             if PLAY.get(inj, 1.0) == 0.0 and (w == self.week or (inj in LONG_OUT and w - self.week < 4)):
                 return 0.0, 0.0
             m = self.sleeper[(w, pid)]
-            sd = a + k * m
             p = 0.8 if inj == "Questionable" else 0.2 if inj == "Doubtful" else 1.0
-            self.cond[(pid, w)] = (m / p if p else m, p)       # Sleeper already discounts injury risk
-            return m, sd * sd
+            cm = m / p if p else m                 # Sleeper already discounts this week's injury risk
+            if w > self.week:
+                # later weeks: Sleeper projects him healthy, but some players get hurt before then
+                p = self.attrition(pid)
+                cm, m = m, m * p
+            sd = a + k * cm
+            self.cond[(pid, w)] = (cm, p)
+            mean = m
+            return mean, max(0.0, p * (sd * sd + cm * cm) - mean * mean)
         if w in self.sleeper_weeks and pos in ("QB", "RB", "WR", "TE"):
             # Sleeper covered this week but not him: not expected to play
             return 0.0, 0.0
@@ -591,7 +607,7 @@ def build(store: Store, now: datetime | None = None) -> dict:
     sim_rows = []
     for rid, pids in roster.items():
         for pid in pids:
-            if slot_of.get(pid) not in ("starter", "bench", "ir") or P.pos(pid) is None:
+            if slot_of.get(pid) not in ("starter", "bench", "reserve") or P.pos(pid) is None:
                 continue
             for w in range(week + 1, playoff_weeks[-1] + 1):
                 P.dist(pid, w)
@@ -603,14 +619,22 @@ def build(store: Store, now: datetime | None = None) -> dict:
     # ---- waivers
     rostered = {p for pids in roster.values() for p in pids}
     weeks_left = [w for w in range(week, playoff_weeks[-1] + 1)]
-    p_po = {r["roster_id"]: r["p_playoffs"] for r in store.query("SELECT roster_id, p_playoffs FROM season_sim")} \
-        if _has(store, "season_sim") else {}
+    odds = {r["roster_id"]: (r["p_playoffs"], r["p_title"]) for r in store.query(
+        "SELECT roster_id, p_playoffs, p_title FROM season_sim")} if _has(store, "season_sim") else {}
 
     def weight(rid, w):
+        """How much a point in week w is worth to this team: regular-season weeks by its playoff
+        hopes (a team that's out gains little from winning now), playoff weeks by its chance of
+        still being alive in that round (from making the playoffs down to reaching the final)."""
+        p, t = odds.get(rid, (None, None))
+        if p is None:
+            return 1.0 if w <= last_reg else 0.35
         if w <= last_reg:
-            return 1.0
-        p = p_po.get(rid)
-        return 0.7 * (0.5 if p is None else p)
+            return min(1.0, 0.1 + 2.0 * p)
+        r = w - (last_reg + 1)
+        final = min(p, 2.0 * (t or 0.0))
+        alive = [p, (p * final) ** 0.5, final]
+        return alive[min(r, 2)]
 
     start_pos = {pos for s in slots for pos in eligible(s)}
     candidates = []

@@ -17,6 +17,24 @@ from .sleeper import SleeperClient
 from .store import Store
 
 
+def _kickoff_soon(store: Store, hours: float = 3.0) -> bool:
+    """An NFL game starts within the next few hours (from nflverse's schedule)."""
+    if not store.query("SELECT 1 FROM sqlite_master WHERE name='nfl_schedules'"):
+        return False
+    from datetime import datetime, timedelta, timezone
+    from .weekly import _kickoff
+    now = datetime.now(timezone.utc)
+    cols = {r["name"] for r in store.query("PRAGMA table_info(nfl_schedules)")}
+    if not {"gameday", "gametime"} <= cols:
+        return False
+    days = [(now + timedelta(days=d)).strftime("%Y-%m-%d") for d in (-1, 0, 1)]
+    for r in store.query("SELECT gameday, gametime FROM nfl_schedules WHERE gameday IN (?,?,?)", tuple(days)):
+        k = _kickoff(r["gameday"], r["gametime"])
+        if k and timedelta(0) <= k - now <= timedelta(hours=hours):
+            return True
+    return False
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="dynasty")
     ap.add_argument("command", choices=["refresh", "export", "status"])
@@ -63,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
                 store, client, cfg.league_id, cfg.username,
                 owner_leagues=cfg.owner_leagues and not args.quick,
                 players=not args.quick,
+                injuries_only=args.quick and _kickoff_soon(store),
             )
             print(f"Sleeper: league {res.current_league_id}, seasons {', '.join(res.seasons)}, "
                   f"my roster {res.my_roster_id}, {client.calls} API calls")
@@ -95,6 +114,11 @@ def main(argv: list[str] | None = None) -> int:
                     print("Week: " + ", ".join(f"{k} {v}" for k, v in wk.items()))
                 except Exception as exc:  # noqa: BLE001 - never block the refresh
                     logging.getLogger("dynasty").warning("weekly build failed: %s", exc, exc_info=True)
+                    # don't let the season simulation run on last run's lineups and weeks
+                    for tbl in ("week_team", "sim_player_week"):
+                        store.conn.execute(f"DROP TABLE IF EXISTS {tbl}")
+                    store.conn.execute("DELETE FROM raw_snapshot WHERE endpoint='weekly'")
+                    store.commit()
                 pk = picks.build(store, cfg.value_weights)
                 print("Picks: " + ", ".join(f"{k} {v}" for k, v in pk.items()))
                 try:
